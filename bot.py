@@ -1,347 +1,1921 @@
-'''
-Strength-aware poker bot with conservative auctions, board texture adjustments,
-opponent tendency tracking, and bounded Monte Carlo for close late-street spots.
-'''
 from pkbot.actions import ActionFold, ActionCall, ActionCheck, ActionRaise, ActionBid
 from pkbot.states import GameInfo, PokerState
 from pkbot.base import BaseBot
 from pkbot.runner import parse_args, run_bot
 
 import random
-import eval7
+import json
 
-
-RANK_VALUE = {
-    '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7,
-    '8': 8, '9': 9, 'T': 10, 'J': 11, 'Q': 12, 'K': 13, 'A': 14,
+POLICY = json.loads("""
+{"442368": {"fold": 0.017, "call": 0.071, "raise_small": 0.258, "raise_big": 0.655},
+    "442369": {"fold": 0.675, "call": 0.206, "raise_small": 0.092, "raise_big": 0.027},
+    "1474560": {"call": 0.186, "raise_small": 0.142, "raise_big": 0.673},
+    "1474561": {"fold": 0.181, "call": 0.649, "raise_small": 0.102, "raise_big": 0.067},
+    "2523136": {"call": 0.554, "raise_small": 0.232, "raise_big": 0.213},
+    "2523649": {"fold": 0.247, "call": 0.728, "raise_small": 0.02, "raise_big": 0.005},
+    "1474562": {"fold": 0.013, "call": 0.745, "raise_small": 0.033, "raise_big": 0.21},
+    "1475074": {"fold": 0.011, "call": 0.104, "raise_small": 0.425, "raise_big": 0.46},
+    "1475587": {"fold": 0.06, "call": 0.94},
+    "442370": {"fold": 0.026, "call": 0.048, "raise_small": 0.285, "raise_big": 0.641},
+    "1475137": {"fold": 0.111, "call": 0.845, "raise_small": 0.029, "raise_big": 0.016},
+    "2524160": {"call": 0.999, "raise_small": 0.0, "raise_big": 0.0},
+    "1475586": {"fold": 0.01, "call": 0.908, "raise_small": 0.078, "raise_big": 0.004},
+    "1476738": {"fold": 0.092, "call": 0.487, "raise_small": 0.298, "raise_big": 0.124},
+    "737280": {"fold": 0.005, "call": 0.132, "raise_small": 0.087, "raise_big": 0.775},
+    "1736704": {"call": 0.147, "raise_small": 0.071, "raise_big": 0.783},
+    "2785280": {"call": 0.094, "raise_small": 0.131, "raise_big": 0.775},
+    "3833856": {"call": 0.398, "raise_small": 0.466, "raise_big": 0.136},
+    "3309569": {"fold": 0.31, "call": 0.169, "raise_small": 0.458, "raise_big": 0.063},
+    "2260993": {"fold": 0.278, "call": 0.283, "raise_small": 0.368, "raise_big": 0.071},
+    "2785282": {"fold": 0.005, "call": 0.034, "raise_small": 0.184, "raise_big": 0.777},
+    "2261507": {"fold": 0.343, "call": 0.657},
+    "2261571": {"fold": 0.538, "call": 0.462},
+    "1212417": {"fold": 0.447, "call": 0.292, "raise_small": 0.176, "raise_big": 0.085},
+    "1736706": {"fold": 0.003, "call": 0.842, "raise_small": 0.014, "raise_big": 0.141},
+    "1212419": {"fold": 0.121, "call": 0.879},
+    "2785792": {"call": 0.418, "raise_small": 0.406, "raise_big": 0.176},
+    "2261505": {"fold": 0.321, "call": 0.597, "raise_small": 0.061, "raise_big": 0.021},
+    "2261569": {"fold": 0.342, "call": 0.526, "raise_small": 0.102, "raise_big": 0.03},
+    "1212931": {"fold": 0.082, "call": 0.918},
+    "1212995": {"fold": 0.254, "call": 0.746},
+    "2786304": {"call": 0.998, "raise_small": 0.001, "raise_big": 0.001},
+    "147457": {"fold": 0.841, "call": 0.063, "raise_small": 0.071, "raise_big": 0.025},
+    "1458176": {"call": 0.381, "raise_small": 0.469, "raise_big": 0.15},
+    "1720321": {"fold": 0.322, "call": 0.504, "raise_small": 0.116, "raise_big": 0.058},
+    "2510848": {"call": 0.891, "raise_small": 0.064, "raise_big": 0.046},
+    "3575808": {"call": 0.806, "raise_small": 0.131, "raise_big": 0.064},
+    "3837953": {"fold": 0.058, "call": 0.848, "raise_small": 0.076, "raise_big": 0.018},
+    "1458178": {"fold": 0.052, "call": 0.855, "raise_small": 0.039, "raise_big": 0.054},
+    "589824": {"fold": 0.012, "call": 0.079, "raise_small": 0.153, "raise_big": 0.756},
+    "1605632": {"call": 0.133, "raise_small": 0.096, "raise_big": 0.771},
+    "2654208": {"call": 0.252, "raise_small": 0.251, "raise_big": 0.496},
+    "3702784": {"call": 0.684, "raise_small": 0.244, "raise_big": 0.072},
+    "3571713": {"fold": 0.182, "call": 0.395, "raise_small": 0.409, "raise_big": 0.015},
+    "2523137": {"fold": 0.1, "call": 0.595, "raise_small": 0.255, "raise_big": 0.05},
+    "1605634": {"fold": 0.007, "call": 0.819, "raise_small": 0.017, "raise_big": 0.157},
+    "1474563": {"fold": 0.074, "call": 0.926},
+    "1475075": {"fold": 0.054, "call": 0.946},
+    "2654720": {"call": 0.567, "raise_small": 0.281, "raise_big": 0.152},
+    "589826": {"fold": 0.018, "call": 0.029, "raise_small": 0.083, "raise_big": 0.869},
+    "1606146": {"fold": 0.008, "call": 0.068, "raise_small": 0.193, "raise_big": 0.73},
+    "1475073": {"fold": 0.024, "call": 0.953, "raise_small": 0.015, "raise_big": 0.008},
+    "1606722": {"fold": 0.038, "call": 0.823, "raise_small": 0.129, "raise_big": 0.01},
+    "442371": {"fold": 0.116, "call": 0.884},
+    "2523713": {"fold": 0.285, "call": 0.655, "raise_small": 0.048, "raise_big": 0.012},
+    "1607810": {"fold": 0.205, "call": 0.484, "raise_small": 0.225, "raise_big": 0.086},
+    "1606144": {"call": 0.012, "raise_small": 0.049, "raise_big": 0.938},
+    "1475649": {"fold": 0.058, "call": 0.933, "raise_small": 0.007, "raise_big": 0.003},
+    "442883": {"fold": 0.527, "call": 0.473},
+    "1720320": {"call": 0.328, "raise_small": 0.256, "raise_big": 0.416},
+    "1589249": {"fold": 0.46, "call": 0.386, "raise_small": 0.11, "raise_big": 0.044},
+    "2654209": {"fold": 0.072, "call": 0.777, "raise_small": 0.111, "raise_big": 0.04},
+    "3870720": {"call": 0.116, "raise_small": 0.145, "raise_big": 0.739},
+    "2785794": {"fold": 0.002, "call": 0.994, "raise_small": 0.003, "raise_big": 0.001},
+    "1720322": {"fold": 0.02, "call": 0.816, "raise_small": 0.027, "raise_big": 0.136},
+    "1589251": {"fold": 0.058, "call": 0.942},
+    "1622016": {"call": 0.135, "raise_small": 0.084, "raise_big": 0.781},
+    "2670592": {"call": 0.084, "raise_small": 0.104, "raise_big": 0.812},
+    "3723264": {"call": 0.456, "raise_small": 0.364, "raise_big": 0.181},
+    "2785281": {"fold": 0.078, "call": 0.815, "raise_small": 0.076, "raise_big": 0.031},
+    "2670594": {"fold": 0.014, "call": 0.044, "raise_small": 0.182, "raise_big": 0.76},
+    "2785795": {"fold": 0.336, "call": 0.664},
+    "2785859": {"fold": 0.359, "call": 0.641},
+    "1736705": {"fold": 0.103, "call": 0.806, "raise_small": 0.049, "raise_big": 0.042},
+    "1622018": {"fold": 0.011, "call": 0.754, "raise_small": 0.032, "raise_big": 0.202},
+    "2785793": {"fold": 0.285, "call": 0.694, "raise_small": 0.016, "raise_big": 0.004},
+    "2785857": {"fold": 0.366, "call": 0.577, "raise_small": 0.05, "raise_big": 0.007},
+    "1736707": {"fold": 0.104, "call": 0.896},
+    "1737219": {"fold": 0.054, "call": 0.946},
+    "2671104": {"call": 0.342, "raise_small": 0.413, "raise_big": 0.246},
+    "737281": {"fold": 0.218, "call": 0.707, "raise_small": 0.051, "raise_big": 0.024},
+    "2671170": {"fold": 0.024, "call": 0.803, "raise_small": 0.139, "raise_big": 0.034},
+    "1458177": {"fold": 0.648, "call": 0.178, "raise_small": 0.126, "raise_big": 0.048},
+    "2506753": {"fold": 0.357, "call": 0.325, "raise_small": 0.271, "raise_big": 0.048},
+    "2507329": {"fold": 0.438, "call": 0.454, "raise_small": 0.08, "raise_big": 0.028},
+    "2789376": {"call": 0.086, "raise_small": 0.138, "raise_big": 0.776},
+    "3837952": {"call": 0.355, "raise_small": 0.48, "raise_big": 0.166},
+    "3592193": {"fold": 0.083, "call": 0.73, "raise_small": 0.153, "raise_big": 0.034},
+    "2527233": {"fold": 0.045, "call": 0.517, "raise_small": 0.304, "raise_big": 0.135},
+    "2789890": {"fold": 0.009, "call": 0.971, "raise_small": 0.014, "raise_big": 0.006},
+    "737282": {"fold": 0.009, "call": 0.015, "raise_small": 0.034, "raise_big": 0.942},
+    "2527745": {"fold": 0.192, "call": 0.755, "raise_small": 0.041, "raise_big": 0.011},
+    "1737218": {"fold": 0.007, "call": 0.054, "raise_small": 0.09, "raise_big": 0.849},
+    "2789888": {"call": 0.697, "raise_small": 0.188, "raise_big": 0.114},
+    "1737216": {"call": 0.004, "raise_small": 0.042, "raise_big": 0.953},
+    "2527809": {"fold": 0.19, "call": 0.679, "raise_small": 0.105, "raise_big": 0.025},
+    "2790400": {"call": 0.988, "raise_small": 0.006, "raise_big": 0.006},
+    "3559424": {"call": 0.919, "raise_small": 0.046, "raise_big": 0.035},
+    "3330049": {"fold": 0.195, "call": 0.374, "raise_small": 0.31, "raise_big": 0.121},
+    "3559426": {"fold": 0.334, "call": 0.561, "raise_small": 0.074, "raise_big": 0.032},
+    "2281473": {"fold": 0.175, "call": 0.338, "raise_small": 0.294, "raise_big": 0.193},
+    "2510850": {"fold": 0.137, "call": 0.181, "raise_small": 0.541, "raise_big": 0.142},
+    "2281987": {"fold": 0.32, "call": 0.68},
+    "2282051": {"fold": 0.331, "call": 0.669},
+    "1196033": {"fold": 0.704, "call": 0.099, "raise_small": 0.13, "raise_big": 0.067},
+    "2281985": {"fold": 0.303, "call": 0.551, "raise_small": 0.112, "raise_big": 0.034},
+    "1196035": {"fold": 0.066, "call": 0.934},
+    "1196547": {"fold": 0.122, "call": 0.878},
+    "2511362": {"fold": 0.297, "call": 0.61, "raise_small": 0.064, "raise_big": 0.029},
+    "2511360": {"call": 0.886, "raise_small": 0.064, "raise_big": 0.05},
+    "1196611": {"fold": 0.348, "call": 0.652},
+    "1458690": {"fold": 0.059, "call": 0.531, "raise_small": 0.186, "raise_big": 0.224},
+    "1197123": {"fold": 0.455, "call": 0.545},
+    "2506752": {"call": 0.849, "raise_small": 0.088, "raise_big": 0.064},
+    "3555328": {"call": 0.905, "raise_small": 0.06, "raise_big": 0.035},
+    "1458691": {"fold": 0.056, "call": 0.944},
+    "1458755": {"fold": 0.241, "call": 0.759},
+    "3719168": {"call": 0.242, "raise_small": 0.481, "raise_big": 0.277},
+    "3555329": {"fold": 0.257, "call": 0.24, "raise_small": 0.452, "raise_big": 0.051},
+    "3719170": {"fold": 0.013, "call": 0.847, "raise_small": 0.107, "raise_big": 0.033},
+    "2506755": {"fold": 0.242, "call": 0.758},
+    "2507267": {"fold": 0.623, "call": 0.377},
+    "1458179": {"fold": 0.053, "call": 0.947},
+    "2507265": {"fold": 0.352, "call": 0.597, "raise_small": 0.036, "raise_big": 0.015},
+    "1458689": {"fold": 0.016, "call": 0.966, "raise_small": 0.012, "raise_big": 0.005},
+    "1622530": {"fold": 0.017, "call": 0.08, "raise_small": 0.176, "raise_big": 0.726},
+    "1458753": {"fold": 0.31, "call": 0.648, "raise_small": 0.03, "raise_big": 0.012},
+    "1622528": {"call": 0.018, "raise_small": 0.112, "raise_big": 0.87},
+    "1459265": {"fold": 0.144, "call": 0.842, "raise_small": 0.011, "raise_big": 0.002},
+    "1623106": {"fold": 0.09, "call": 0.46, "raise_small": 0.304, "raise_big": 0.145},
+    "1624194": {"fold": 0.213, "call": 0.264, "raise_small": 0.263, "raise_big": 0.26},
+    "589825": {"fold": 0.432, "call": 0.463, "raise_small": 0.078, "raise_big": 0.027},
+    "1490944": {"call": 0.114, "raise_small": 0.097, "raise_big": 0.789},
+    "2539520": {"call": 0.088, "raise_small": 0.11, "raise_big": 0.802},
+    "3588096": {"call": 0.36, "raise_small": 0.465, "raise_big": 0.175},
+    "2539522": {"fold": 0.013, "call": 0.038, "raise_small": 0.207, "raise_big": 0.743},
+    "3850240": {"call": 0.167, "raise_small": 0.356, "raise_big": 0.477},
+    "3719169": {"fold": 0.06, "call": 0.877, "raise_small": 0.049, "raise_big": 0.014},
+    "3850242": {"fold": 0.022, "call": 0.808, "raise_small": 0.128, "raise_big": 0.042},
+    "2654211": {"fold": 0.122, "call": 0.878},
+    "2654723": {"fold": 0.3, "call": 0.7},
+    "1605633": {"fold": 0.129, "call": 0.729, "raise_small": 0.081, "raise_big": 0.06},
+    "2654721": {"fold": 0.254, "call": 0.728, "raise_small": 0.015, "raise_big": 0.004},
+    "2654785": {"fold": 0.192, "call": 0.765, "raise_small": 0.035, "raise_big": 0.008},
+    "1605635": {"fold": 0.124, "call": 0.876},
+    "1606147": {"fold": 0.042, "call": 0.958},
+    "1720898": {"fold": 0.029, "call": 0.264, "raise_small": 0.249, "raise_big": 0.458},
+    "1606145": {"fold": 0.026, "call": 0.948, "raise_small": 0.017, "raise_big": 0.008},
+    "589827": {"fold": 0.112, "call": 0.888},
+    "1606209": {"fold": 0.102, "call": 0.849, "raise_small": 0.035, "raise_big": 0.014},
+    "1720832": {"call": 0.103, "raise_small": 0.21, "raise_big": 0.687},
+    "1606721": {"fold": 0.063, "call": 0.919, "raise_small": 0.014, "raise_big": 0.004},
+    "590339": {"fold": 0.442, "call": 0.558},
+    "1607297": {"fold": 0.08, "call": 0.875, "raise_small": 0.034, "raise_big": 0.012},
+    "294912": {"fold": 0.021, "call": 0.057, "raise_small": 0.553, "raise_big": 0.368},
+    "3571712": {"call": 0.815, "raise_small": 0.134, "raise_big": 0.051},
+    "3588097": {"fold": 0.054, "call": 0.861, "raise_small": 0.065, "raise_big": 0.019},
+    "3571714": {"fold": 0.035, "call": 0.883, "raise_small": 0.063, "raise_big": 0.019},
+    "2506754": {"fold": 0.046, "call": 0.471, "raise_small": 0.372, "raise_big": 0.112},
+    "2523139": {"fold": 0.095, "call": 0.905},
+    "2523651": {"fold": 0.495, "call": 0.505},
+    "2523715": {"fold": 0.544, "call": 0.456},
+    "2507264": {"call": 0.84, "raise_small": 0.072, "raise_big": 0.087},
+    "1458688": {"call": 0.616, "raise_small": 0.177, "raise_big": 0.207},
+    "1460354": {"fold": 0.261, "call": 0.56, "raise_small": 0.117, "raise_big": 0.063},
+    "1476225": {"fold": 0.073, "call": 0.886, "raise_small": 0.028, "raise_big": 0.013},
+    "3850241": {"fold": 0.062, "call": 0.875, "raise_small": 0.049, "raise_big": 0.015},
+    "2801665": {"fold": 0.049, "call": 0.842, "raise_small": 0.058, "raise_big": 0.052},
+    "2654210": {"fold": 0.009, "call": 0.073, "raise_small": 0.424, "raise_big": 0.494},
+    "2801667": {"fold": 0.255, "call": 0.745},
+    "2802179": {"fold": 0.401, "call": 0.599},
+    "1753089": {"fold": 0.149, "call": 0.652, "raise_small": 0.119, "raise_big": 0.08},
+    "2655298": {"fold": 0.032, "call": 0.917, "raise_small": 0.042, "raise_big": 0.009},
+    "737283": {"fold": 0.119, "call": 0.881},
+    "2654786": {"fold": 0.022, "call": 0.949, "raise_small": 0.026, "raise_big": 0.002},
+    "1753603": {"fold": 0.09, "call": 0.91},
+    "1753667": {"fold": 0.291, "call": 0.709},
+    "1589248": {"call": 0.314, "raise_small": 0.396, "raise_big": 0.29},
+    "1589250": {"fold": 0.024, "call": 0.859, "raise_small": 0.033, "raise_big": 0.084},
+    "147459": {"fold": 0.165, "call": 0.835},
+    "1196545": {"fold": 0.041, "call": 0.916, "raise_small": 0.03, "raise_big": 0.013},
+    "1196609": {"fold": 0.318, "call": 0.562, "raise_small": 0.09, "raise_big": 0.03},
+    "1589760": {"call": 0.182, "raise_small": 0.395, "raise_big": 0.423},
+    "1197121": {"fold": 0.172, "call": 0.778, "raise_small": 0.037, "raise_big": 0.012},
+    "147971": {"fold": 0.567, "call": 0.433},
+    "2523138": {"fold": 0.011, "call": 0.16, "raise_small": 0.614, "raise_big": 0.215},
+    "2523650": {"fold": 0.019, "call": 0.974, "raise_small": 0.005, "raise_big": 0.002},
+    "1475072": {"call": 0.028, "raise_small": 0.076, "raise_big": 0.896},
+    "147456": {"fold": 0.03, "call": 0.051, "raise_small": 0.652, "raise_big": 0.267},
+    "1196032": {"call": 0.565, "raise_small": 0.356, "raise_big": 0.08},
+    "2260992": {"call": 0.853, "raise_small": 0.074, "raise_big": 0.072},
+    "3309568": {"call": 0.906, "raise_small": 0.064, "raise_big": 0.03},
+    "3833857": {"fold": 0.114, "call": 0.711, "raise_small": 0.156, "raise_big": 0.019},
+    "2260994": {"fold": 0.037, "call": 0.408, "raise_small": 0.431, "raise_big": 0.124},
+    "1196034": {"fold": 0.547, "call": 0.363, "raise_small": 0.053, "raise_big": 0.037},
+    "1720323": {"fold": 0.151, "call": 0.849},
+    "1720835": {"fold": 0.067, "call": 0.933},
+    "2261504": {"call": 0.813, "raise_small": 0.087, "raise_big": 0.1},
+    "2261506": {"fold": 0.061, "call": 0.904, "raise_small": 0.023, "raise_big": 0.012},
+    "1196546": {"fold": 0.462, "call": 0.3, "raise_small": 0.085, "raise_big": 0.154},
+    "1721411": {"fold": 0.304, "call": 0.696},
+    "147458": {"fold": 0.19, "call": 0.361, "raise_small": 0.358, "raise_big": 0.091},
+    "294913": {"fold": 0.794, "call": 0.098, "raise_small": 0.081, "raise_big": 0.026},
+    "2392065": {"fold": 0.174, "call": 0.362, "raise_small": 0.413, "raise_big": 0.051},
+    "2654722": {"fold": 0.008, "call": 0.988, "raise_small": 0.003, "raise_big": 0.001},
+    "294915": {"fold": 0.138, "call": 0.862},
+    "1344001": {"fold": 0.029, "call": 0.944, "raise_small": 0.019, "raise_big": 0.008},
+    "2523648": {"call": 0.698, "raise_small": 0.173, "raise_big": 0.129},
+    "1459841": {"fold": 0.342, "call": 0.601, "raise_small": 0.042, "raise_big": 0.014},
+    "2638336": {"call": 0.812, "raise_small": 0.091, "raise_big": 0.097},
+    "2278465": {"fold": 0.404, "call": 0.304, "raise_small": 0.175, "raise_big": 0.117},
+    "1589762": {"fold": 0.022, "call": 0.398, "raise_small": 0.274, "raise_big": 0.306},
+    "1589826": {"fold": 0.069, "call": 0.402, "raise_small": 0.191, "raise_big": 0.338},
+    "1197697": {"fold": 0.356, "call": 0.464, "raise_small": 0.137, "raise_big": 0.043},
+    "2802243": {"fold": 0.337, "call": 0.663},
+    "2802177": {"fold": 0.236, "call": 0.734, "raise_small": 0.025, "raise_big": 0.006},
+    "1753601": {"fold": 0.113, "call": 0.786, "raise_small": 0.075, "raise_big": 0.026},
+    "2801664": {"call": 0.066, "raise_small": 0.075, "raise_big": 0.859},
+    "2802176": {"call": 0.317, "raise_small": 0.493, "raise_big": 0.191},
+    "1459203": {"fold": 0.061, "call": 0.939},
+    "1212416": {"call": 0.612, "raise_small": 0.193, "raise_big": 0.195},
+    "3309570": {"fold": 0.234, "call": 0.666, "raise_small": 0.084, "raise_big": 0.015},
+    "2670593": {"fold": 0.051, "call": 0.841, "raise_small": 0.07, "raise_big": 0.038},
+    "2670595": {"fold": 0.186, "call": 0.814},
+    "2671107": {"fold": 0.263, "call": 0.737},
+    "1212418": {"fold": 0.041, "call": 0.713, "raise_small": 0.09, "raise_big": 0.156},
+    "2671105": {"fold": 0.227, "call": 0.737, "raise_small": 0.029, "raise_big": 0.007},
+    "1589763": {"fold": 0.074, "call": 0.926},
+    "1589827": {"fold": 0.29, "call": 0.71},
+    "1331200": {"call": 0.704, "raise_small": 0.18, "raise_big": 0.116},
+    "2379776": {"call": 0.915, "raise_small": 0.048, "raise_big": 0.037},
+    "3444736": {"call": 0.877, "raise_small": 0.078, "raise_big": 0.045},
+    "2772993": {"fold": 0.172, "call": 0.304, "raise_small": 0.3, "raise_big": 0.224},
+    "2379778": {"fold": 0.344, "call": 0.115, "raise_small": 0.365, "raise_big": 0.176},
+    "2772995": {"fold": 0.465, "call": 0.535},
+    "2773507": {"fold": 0.507, "call": 0.493},
+    "2773571": {"fold": 0.564, "call": 0.436},
+    "1724417": {"fold": 0.376, "call": 0.264, "raise_small": 0.204, "raise_big": 0.156},
+    "2380290": {"fold": 0.609, "call": 0.279, "raise_small": 0.069, "raise_big": 0.042},
+    "2380866": {"fold": 0.611, "call": 0.217, "raise_small": 0.091, "raise_big": 0.081},
+    "294914": {"fold": 0.061, "call": 0.189, "raise_small": 0.515, "raise_big": 0.234},
+    "2773505": {"fold": 0.256, "call": 0.609, "raise_small": 0.108, "raise_big": 0.027},
+    "1331778": {"fold": 0.375, "call": 0.117, "raise_small": 0.286, "raise_big": 0.222},
+    "1724929": {"fold": 0.126, "call": 0.699, "raise_small": 0.13, "raise_big": 0.045},
+    "1331714": {"fold": 0.264, "call": 0.164, "raise_small": 0.305, "raise_big": 0.268},
+    "1724993": {"fold": 0.323, "call": 0.397, "raise_small": 0.177, "raise_big": 0.103},
+    "1737283": {"fold": 0.283, "call": 0.717},
+    "1737217": {"fold": 0.037, "call": 0.935, "raise_small": 0.019, "raise_big": 0.009},
+    "1737281": {"fold": 0.172, "call": 0.752, "raise_small": 0.049, "raise_big": 0.027},
+    "3703296": {"call": 0.693, "raise_small": 0.286, "raise_big": 0.021},
+    "1327104": {"call": 0.546, "raise_small": 0.361, "raise_big": 0.093},
+    "2375680": {"call": 0.894, "raise_small": 0.057, "raise_big": 0.048},
+    "3440640": {"call": 0.884, "raise_small": 0.08, "raise_big": 0.036},
+    "3440641": {"fold": 0.224, "call": 0.216, "raise_small": 0.523, "raise_big": 0.038},
+    "3440642": {"fold": 0.076, "call": 0.848, "raise_small": 0.059, "raise_big": 0.016},
+    "2375681": {"fold": 0.367, "call": 0.234, "raise_small": 0.336, "raise_big": 0.063},
+    "1327105": {"fold": 0.697, "call": 0.098, "raise_small": 0.151, "raise_big": 0.053},
+    "1327106": {"fold": 0.238, "call": 0.689, "raise_small": 0.039, "raise_big": 0.034},
+    "1327107": {"fold": 0.053, "call": 0.947},
+    "2376192": {"call": 0.883, "raise_small": 0.049, "raise_big": 0.069},
+    "2376193": {"fold": 0.35, "call": 0.59, "raise_small": 0.045, "raise_big": 0.016},
+    "2376257": {"fold": 0.478, "call": 0.386, "raise_small": 0.092, "raise_big": 0.044},
+    "1327619": {"fold": 0.072, "call": 0.928},
+    "1327683": {"fold": 0.256, "call": 0.744},
+    "2376704": {"call": 0.98, "raise_small": 0.01, "raise_big": 0.01},
+    "2375682": {"fold": 0.156, "call": 0.469, "raise_small": 0.283, "raise_big": 0.091},
+    "2376194": {"fold": 0.211, "call": 0.74, "raise_small": 0.03, "raise_big": 0.019},
+    "1327682": {"fold": 0.504, "call": 0.252, "raise_small": 0.137, "raise_big": 0.108},
+    "1328131": {"fold": 0.073, "call": 0.927},
+    "1329283": {"fold": 0.452, "call": 0.548},
+    "1245184": {"call": 0.161, "raise_small": 0.155, "raise_big": 0.684},
+    "2293760": {"call": 0.208, "raise_small": 0.107, "raise_big": 0.685},
+    "3342336": {"call": 0.564, "raise_small": 0.144, "raise_big": 0.292},
+    "2293762": {"fold": 0.057, "call": 0.064, "raise_small": 0.395, "raise_big": 0.484},
+    "2294274": {"fold": 0.097, "call": 0.645, "raise_small": 0.176, "raise_big": 0.082},
+    "2392064": {"call": 0.8, "raise_small": 0.104, "raise_big": 0.096},
+    "3293185": {"fold": 0.353, "call": 0.132, "raise_small": 0.393, "raise_big": 0.122},
+    "2244609": {"fold": 0.361, "call": 0.212, "raise_small": 0.347, "raise_big": 0.081},
+    "2392066": {"fold": 0.017, "call": 0.405, "raise_small": 0.452, "raise_big": 0.126},
+    "2244611": {"fold": 0.37, "call": 0.63},
+    "2245123": {"fold": 0.609, "call": 0.391},
+    "2245121": {"fold": 0.38, "call": 0.522, "raise_small": 0.068, "raise_big": 0.03},
+    "2245185": {"fold": 0.459, "call": 0.402, "raise_small": 0.093, "raise_big": 0.046},
+    "2393088": {"call": 0.996, "raise_small": 0.002, "raise_big": 0.002},
+    "2392576": {"call": 0.8, "raise_small": 0.089, "raise_big": 0.111},
+    "1327618": {"fold": 0.349, "call": 0.404, "raise_small": 0.118, "raise_big": 0.129},
+    "2392578": {"fold": 0.038, "call": 0.948, "raise_small": 0.01, "raise_big": 0.004},
+    "1197059": {"fold": 0.171, "call": 0.829},
+    "2412544": {"call": 0.478, "raise_small": 0.236, "raise_big": 0.286},
+    "3575809": {"fold": 0.088, "call": 0.688, "raise_small": 0.197, "raise_big": 0.028},
+    "3444738": {"fold": 0.077, "call": 0.798, "raise_small": 0.102, "raise_big": 0.023},
+    "2543617": {"fold": 0.057, "call": 0.502, "raise_small": 0.284, "raise_big": 0.157},
+    "2412546": {"fold": 0.042, "call": 0.118, "raise_small": 0.592, "raise_big": 0.247},
+    "2543619": {"fold": 0.129, "call": 0.871},
+    "2544131": {"fold": 0.212, "call": 0.788},
+    "2544195": {"fold": 0.281, "call": 0.719},
+    "2413058": {"fold": 0.076, "call": 0.871, "raise_small": 0.041, "raise_big": 0.012},
+    "3702786": {"fold": 0.017, "call": 0.899, "raise_small": 0.068, "raise_big": 0.015},
+    "2768897": {"fold": 0.291, "call": 0.36, "raise_small": 0.291, "raise_big": 0.058},
+    "2768899": {"fold": 0.257, "call": 0.743},
+    "2769411": {"fold": 0.394, "call": 0.606},
+    "2769409": {"fold": 0.336, "call": 0.616, "raise_small": 0.039, "raise_big": 0.009},
+    "2671106": {"fold": 0.006, "call": 0.979, "raise_small": 0.012, "raise_big": 0.003},
+    "1720899": {"fold": 0.201, "call": 0.799},
+    "2769473": {"fold": 0.412, "call": 0.473, "raise_small": 0.086, "raise_big": 0.028},
+    "1622594": {"fold": 0.032, "call": 0.168, "raise_small": 0.203, "raise_big": 0.596},
+    "2671616": {"call": 0.996, "raise_small": 0.002, "raise_big": 0.002},
+    "1721347": {"fold": 0.047, "call": 0.953},
+    "1722499": {"fold": 0.373, "call": 0.627},
+    "2637824": {"call": 0.782, "raise_small": 0.133, "raise_big": 0.086},
+    "3686400": {"call": 0.867, "raise_small": 0.091, "raise_big": 0.042},
+    "3424257": {"fold": 0.305, "call": 0.154, "raise_small": 0.462, "raise_big": 0.079},
+    "3686402": {"fold": 0.13, "call": 0.811, "raise_small": 0.048, "raise_big": 0.011},
+    "2637826": {"fold": 0.036, "call": 0.235, "raise_small": 0.6, "raise_big": 0.129},
+    "2375683": {"fold": 0.156, "call": 0.844},
+    "2376195": {"fold": 0.42, "call": 0.58},
+    "2638848": {"call": 0.998, "raise_small": 0.001, "raise_big": 0.001},
+    "2638338": {"fold": 0.045, "call": 0.936, "raise_small": 0.012, "raise_big": 0.007},
+    "1328195": {"fold": 0.425, "call": 0.575},
+    "3461121": {"fold": 0.088, "call": 0.543, "raise_small": 0.304, "raise_big": 0.065},
+    "1344577": {"fold": 0.062, "call": 0.92, "raise_small": 0.014, "raise_big": 0.003},
+    "2392067": {"fold": 0.154, "call": 0.846},
+    "2392579": {"fold": 0.376, "call": 0.624},
+    "2392643": {"fold": 0.452, "call": 0.548},
+    "2392577": {"fold": 0.292, "call": 0.653, "raise_small": 0.041, "raise_big": 0.014},
+    "2392641": {"fold": 0.371, "call": 0.541, "raise_small": 0.066, "raise_big": 0.022},
+    "2638402": {"fold": 0.237, "call": 0.662, "raise_small": 0.075, "raise_big": 0.026},
+    "1228801": {"fold": 0.268, "call": 0.423, "raise_small": 0.17, "raise_big": 0.139},
+    "3592192": {"call": 0.605, "raise_small": 0.275, "raise_big": 0.121},
+    "1229379": {"fold": 0.391, "call": 0.609},
+    "1229891": {"fold": 0.294, "call": 0.706},
+    "2539521": {"fold": 0.047, "call": 0.822, "raise_small": 0.081, "raise_big": 0.05},
+    "2539523": {"fold": 0.135, "call": 0.865},
+    "2540035": {"fold": 0.285, "call": 0.715},
+    "2540033": {"fold": 0.219, "call": 0.732, "raise_small": 0.037, "raise_big": 0.011},
+    "2540097": {"fold": 0.212, "call": 0.69, "raise_small": 0.078, "raise_big": 0.019},
+    "1475139": {"fold": 0.277, "call": 0.723},
+    "2261570": {"fold": 0.323, "call": 0.538, "raise_small": 0.105, "raise_big": 0.033},
+    "1196610": {"fold": 0.581, "call": 0.146, "raise_small": 0.107, "raise_big": 0.166},
+    "2262016": {"call": 0.986, "raise_small": 0.007, "raise_big": 0.007},
+    "1476739": {"fold": 0.119, "call": 0.881},
+    "2507266": {"fold": 0.087, "call": 0.889, "raise_small": 0.015, "raise_big": 0.008},
+    "1459266": {"fold": 0.337, "call": 0.589, "raise_small": 0.058, "raise_big": 0.017},
+    "1343488": {"call": 0.398, "raise_small": 0.25, "raise_big": 0.353},
+    "3457024": {"call": 0.625, "raise_small": 0.265, "raise_big": 0.11},
+    "3457025": {"fold": 0.108, "call": 0.644, "raise_small": 0.211, "raise_big": 0.037},
+    "3457026": {"fold": 0.025, "call": 0.845, "raise_small": 0.104, "raise_big": 0.026},
+    "1343489": {"fold": 0.302, "call": 0.426, "raise_small": 0.192, "raise_big": 0.08},
+    "1343490": {"fold": 0.022, "call": 0.772, "raise_small": 0.064, "raise_big": 0.142},
+    "1343491": {"fold": 0.052, "call": 0.948},
+    "1344003": {"fold": 0.053, "call": 0.947},
+    "2392642": {"fold": 0.15, "call": 0.746, "raise_small": 0.077, "raise_big": 0.027},
+    "3559425": {"fold": 0.208, "call": 0.295, "raise_small": 0.397, "raise_big": 0.1},
+    "3575810": {"fold": 0.06, "call": 0.817, "raise_small": 0.108, "raise_big": 0.015},
+    "1459267": {"fold": 0.481, "call": 0.519},
+    "1757184": {"call": 0.247, "raise_small": 0.187, "raise_big": 0.566},
+    "1478657": {"fold": 0.22, "call": 0.464, "raise_small": 0.18, "raise_big": 0.136},
+    "2805760": {"call": 0.121, "raise_small": 0.118, "raise_big": 0.76},
+    "1757186": {"fold": 0.051, "call": 0.504, "raise_small": 0.114, "raise_big": 0.331},
+    "1757698": {"fold": 0.035, "call": 0.079, "raise_small": 0.404, "raise_big": 0.481},
+    "1757696": {"call": 0.103, "raise_small": 0.361, "raise_big": 0.537},
+    "2806272": {"call": 0.577, "raise_small": 0.246, "raise_big": 0.177},
+    "1479745": {"fold": 0.173, "call": 0.754, "raise_small": 0.058, "raise_big": 0.015},
+    "1459202": {"fold": 0.139, "call": 0.822, "raise_small": 0.036, "raise_big": 0.004},
+    "2785283": {"fold": 0.21, "call": 0.79},
+    "1737793": {"fold": 0.093, "call": 0.877, "raise_small": 0.024, "raise_big": 0.007},
+    "3866625": {"fold": 0.087, "call": 0.869, "raise_small": 0.027, "raise_big": 0.017},
+    "3555330": {"fold": 0.177, "call": 0.777, "raise_small": 0.034, "raise_big": 0.012},
+    "2818049": {"fold": 0.07, "call": 0.741, "raise_small": 0.079, "raise_big": 0.11},
+    "1769473": {"fold": 0.174, "call": 0.644, "raise_small": 0.084, "raise_big": 0.098},
+    "2818561": {"fold": 0.27, "call": 0.628, "raise_small": 0.081, "raise_big": 0.02},
+    "1769475": {"fold": 0.299, "call": 0.701},
+    "1769987": {"fold": 0.133, "call": 0.867},
+    "2818625": {"fold": 0.355, "call": 0.485, "raise_small": 0.13, "raise_big": 0.03},
+    "1769985": {"fold": 0.09, "call": 0.791, "raise_small": 0.096, "raise_big": 0.023},
+    "1770049": {"fold": 0.278, "call": 0.529, "raise_small": 0.155, "raise_big": 0.037},
+    "2507776": {"call": 0.998, "raise_small": 0.001, "raise_big": 0.001},
+    "1770561": {"fold": 0.239, "call": 0.659, "raise_small": 0.081, "raise_big": 0.021},
+    "737795": {"fold": 0.469, "call": 0.531},
+    "1771137": {"fold": 0.341, "call": 0.526, "raise_small": 0.103, "raise_big": 0.03},
+    "1590337": {"fold": 0.128, "call": 0.856, "raise_small": 0.013, "raise_big": 0.003},
+    "2408449": {"fold": 0.075, "call": 0.712, "raise_small": 0.141, "raise_big": 0.073},
+    "2408451": {"fold": 0.32, "call": 0.68},
+    "2408963": {"fold": 0.31, "call": 0.69},
+    "1212930": {"fold": 0.066, "call": 0.351, "raise_small": 0.35, "raise_big": 0.233},
+    "1344515": {"fold": 0.102, "call": 0.898},
+    "1344579": {"fold": 0.158, "call": 0.842},
+    "3310080": {"call": 0.885, "raise_small": 0.1, "raise_big": 0.015},
+    "2408961": {"fold": 0.241, "call": 0.693, "raise_small": 0.051, "raise_big": 0.016},
+    "2409537": {"fold": 0.52, "call": 0.331, "raise_small": 0.106, "raise_big": 0.043},
+    "3686401": {"fold": 0.235, "call": 0.275, "raise_small": 0.431, "raise_big": 0.058},
+    "2637825": {"fold": 0.294, "call": 0.404, "raise_small": 0.256, "raise_big": 0.046},
+    "2637827": {"fold": 0.224, "call": 0.776},
+    "2638339": {"fold": 0.45, "call": 0.55},
+    "2638337": {"fold": 0.316, "call": 0.653, "raise_small": 0.026, "raise_big": 0.005},
+    "1590339": {"fold": 0.437, "call": 0.563},
+    "3690497": {"fold": 0.166, "call": 0.253, "raise_small": 0.433, "raise_big": 0.148},
+    "3313664": {"call": 0.906, "raise_small": 0.058, "raise_big": 0.036},
+    "3706880": {"call": 0.635, "raise_small": 0.27, "raise_big": 0.096},
+    "3297281": {"fold": 0.25, "call": 0.117, "raise_small": 0.447, "raise_big": 0.185},
+    "3706882": {"fold": 0.028, "call": 0.84, "raise_small": 0.112, "raise_big": 0.02},
+    "1590338": {"fold": 0.171, "call": 0.702, "raise_small": 0.105, "raise_big": 0.022},
+    "1590274": {"fold": 0.067, "call": 0.857, "raise_small": 0.058, "raise_big": 0.018},
+    "1344002": {"fold": 0.03, "call": 0.243, "raise_small": 0.404, "raise_big": 0.323},
+    "1344000": {"call": 0.098, "raise_small": 0.261, "raise_big": 0.642},
+    "3854337": {"fold": 0.074, "call": 0.826, "raise_small": 0.076, "raise_big": 0.023},
+    "1753091": {"fold": 0.306, "call": 0.694},
+    "1475138": {"fold": 0.023, "call": 0.268, "raise_small": 0.317, "raise_big": 0.392},
+    "1475650": {"fold": 0.063, "call": 0.811, "raise_small": 0.098, "raise_big": 0.027},
+    "1753665": {"fold": 0.182, "call": 0.696, "raise_small": 0.09, "raise_big": 0.032},
+    "1754177": {"fold": 0.116, "call": 0.835, "raise_small": 0.037, "raise_big": 0.012},
+    "2802241": {"fold": 0.346, "call": 0.583, "raise_small": 0.061, "raise_big": 0.01},
+    "2658304": {"call": 0.161, "raise_small": 0.22, "raise_big": 0.619},
+    "3706881": {"fold": 0.097, "call": 0.666, "raise_small": 0.21, "raise_big": 0.028},
+    "1344067": {"fold": 0.241, "call": 0.759},
+    "1490946": {"fold": 0.008, "call": 0.717, "raise_small": 0.016, "raise_big": 0.258},
+    "2540032": {"call": 0.405, "raise_small": 0.409, "raise_big": 0.185},
+    "1491458": {"fold": 0.014, "call": 0.074, "raise_small": 0.147, "raise_big": 0.765},
+    "1491522": {"fold": 0.028, "call": 0.188, "raise_small": 0.25, "raise_big": 0.534},
+    "3576320": {"call": 0.834, "raise_small": 0.146, "raise_big": 0.02},
+    "295427": {"fold": 0.563, "call": 0.437},
+    "1327616": {"call": 0.766, "raise_small": 0.086, "raise_big": 0.149},
+    "1328769": {"fold": 0.343, "call": 0.578, "raise_small": 0.053, "raise_big": 0.025},
+    "2527232": {"call": 0.315, "raise_small": 0.285, "raise_big": 0.399},
+    "3313665": {"fold": 0.192, "call": 0.319, "raise_small": 0.396, "raise_big": 0.093},
+    "2265089": {"fold": 0.125, "call": 0.369, "raise_small": 0.33, "raise_big": 0.176},
+    "2527234": {"fold": 0.016, "call": 0.106, "raise_small": 0.664, "raise_big": 0.214},
+    "2265091": {"fold": 0.461, "call": 0.539},
+    "2265601": {"fold": 0.305, "call": 0.542, "raise_small": 0.109, "raise_big": 0.043},
+    "2265665": {"fold": 0.315, "call": 0.476, "raise_small": 0.147, "raise_big": 0.062},
+    "2528256": {"call": 0.995, "raise_small": 0.002, "raise_big": 0.002},
+    "1458754": {"fold": 0.195, "call": 0.454, "raise_small": 0.201, "raise_big": 0.15},
+    "2527744": {"call": 0.806, "raise_small": 0.109, "raise_big": 0.085},
+    "2262082": {"fold": 0.31, "call": 0.304, "raise_small": 0.208, "raise_big": 0.178},
+    "1327617": {"fold": 0.025, "call": 0.954, "raise_small": 0.015, "raise_big": 0.006},
+    "1327681": {"fold": 0.33, "call": 0.608, "raise_small": 0.048, "raise_big": 0.014},
+    "1197058": {"fold": 0.336, "call": 0.459, "raise_small": 0.127, "raise_big": 0.078},
+    "1196544": {"call": 0.708, "raise_small": 0.132, "raise_big": 0.16},
+    "1328193": {"fold": 0.193, "call": 0.785, "raise_small": 0.018, "raise_big": 0.005},
+    "3702785": {"fold": 0.121, "call": 0.642, "raise_small": 0.218, "raise_big": 0.018},
+    "2674688": {"call": 0.17, "raise_small": 0.172, "raise_big": 0.658},
+    "3620864": {"call": 0.098, "raise_small": 0.105, "raise_big": 0.797},
+    "3604481": {"fold": 0.058, "call": 0.731, "raise_small": 0.156, "raise_big": 0.054},
+    "3620866": {"fold": 0.027, "call": 0.405, "raise_small": 0.342, "raise_big": 0.226},
+    "2540034": {"fold": 0.011, "call": 0.971, "raise_small": 0.014, "raise_big": 0.004},
+    "3441152": {"call": 0.89, "raise_small": 0.093, "raise_big": 0.016},
+    "1213507": {"fold": 0.201, "call": 0.799},
+    "1212929": {"fold": 0.069, "call": 0.884, "raise_small": 0.036, "raise_big": 0.012},
+    "1344578": {"fold": 0.169, "call": 0.742, "raise_small": 0.079, "raise_big": 0.01},
+    "1212993": {"fold": 0.168, "call": 0.692, "raise_small": 0.1, "raise_big": 0.039},
+    "1213505": {"fold": 0.065, "call": 0.893, "raise_small": 0.033, "raise_big": 0.008},
+    "1214081": {"fold": 0.078, "call": 0.79, "raise_small": 0.11, "raise_big": 0.022},
+    "1475651": {"fold": 0.133, "call": 0.867},
+    "1753088": {"call": 0.118, "raise_small": 0.074, "raise_big": 0.808},
+    "3325953": {"fold": 0.142, "call": 0.5, "raise_small": 0.281, "raise_big": 0.077},
+    "3833858": {"fold": 0.008, "call": 0.908, "raise_small": 0.069, "raise_big": 0.015},
+    "2260995": {"fold": 0.25, "call": 0.75},
+    "1753090": {"fold": 0.009, "call": 0.744, "raise_small": 0.019, "raise_big": 0.228},
+    "2786370": {"fold": 0.012, "call": 0.934, "raise_small": 0.045, "raise_big": 0.009},
+    "1753666": {"fold": 0.024, "call": 0.126, "raise_small": 0.18, "raise_big": 0.67},
+    "1753600": {"call": 0.014, "raise_small": 0.089, "raise_big": 0.896},
+    "2785858": {"fold": 0.006, "call": 0.961, "raise_small": 0.03, "raise_big": 0.003},
+    "1753602": {"fold": 0.011, "call": 0.076, "raise_small": 0.157, "raise_big": 0.756},
+    "1198211": {"fold": 0.5, "call": 0.5},
+    "3838464": {"call": 0.598, "raise_small": 0.372, "raise_big": 0.03},
+    "1737282": {"fold": 0.012, "call": 0.102, "raise_small": 0.183, "raise_big": 0.703},
+    "2376259": {"fold": 0.47, "call": 0.53},
+    "3834368": {"call": 0.581, "raise_small": 0.393, "raise_big": 0.027},
+    "1720833": {"fold": 0.03, "call": 0.928, "raise_small": 0.029, "raise_big": 0.012},
+    "1589761": {"fold": 0.02, "call": 0.944, "raise_small": 0.025, "raise_big": 0.011},
+    "1590913": {"fold": 0.214, "call": 0.738, "raise_small": 0.035, "raise_big": 0.012},
+    "3461120": {"call": 0.728, "raise_small": 0.171, "raise_big": 0.101},
+    "3723265": {"fold": 0.073, "call": 0.754, "raise_small": 0.143, "raise_big": 0.03},
+    "3461122": {"fold": 0.051, "call": 0.757, "raise_small": 0.151, "raise_big": 0.041},
+    "2674689": {"fold": 0.059, "call": 0.599, "raise_small": 0.21, "raise_big": 0.131},
+    "2674691": {"fold": 0.273, "call": 0.727},
+    "2675201": {"fold": 0.295, "call": 0.611, "raise_small": 0.078, "raise_big": 0.016},
+    "2675265": {"fold": 0.226, "call": 0.605, "raise_small": 0.14, "raise_big": 0.029},
+    "2413568": {"call": 0.968, "raise_small": 0.016, "raise_big": 0.016},
+    "2413056": {"call": 0.82, "raise_small": 0.097, "raise_big": 0.083},
+    "1589825": {"fold": 0.273, "call": 0.675, "raise_small": 0.038, "raise_big": 0.014},
+    "2244608": {"call": 0.91, "raise_small": 0.05, "raise_big": 0.04},
+    "3293184": {"call": 0.939, "raise_small": 0.032, "raise_big": 0.03},
+    "2244610": {"fold": 0.442, "call": 0.245, "raise_small": 0.201, "raise_big": 0.112},
+    "2245120": {"call": 0.869, "raise_small": 0.051, "raise_big": 0.08},
+    "1460355": {"fold": 0.479, "call": 0.521},
+    "3424256": {"call": 0.926, "raise_small": 0.04, "raise_big": 0.034},
+    "3424258": {"fold": 0.286, "call": 0.58, "raise_small": 0.075, "raise_big": 0.059},
+    "1720834": {"fold": 0.022, "call": 0.18, "raise_small": 0.301, "raise_big": 0.497},
+    "2412545": {"fold": 0.082, "call": 0.49, "raise_small": 0.255, "raise_big": 0.173},
+    "2412547": {"fold": 0.35, "call": 0.65},
+    "2413057": {"fold": 0.284, "call": 0.586, "raise_small": 0.1, "raise_big": 0.029},
+    "2413121": {"fold": 0.314, "call": 0.485, "raise_small": 0.163, "raise_big": 0.037},
+    "3588098": {"fold": 0.016, "call": 0.868, "raise_small": 0.09, "raise_big": 0.026},
+    "1359873": {"fold": 0.216, "call": 0.589, "raise_small": 0.113, "raise_big": 0.082},
+    "1359875": {"fold": 0.184, "call": 0.816},
+    "1360387": {"fold": 0.126, "call": 0.874},
+    "1360385": {"fold": 0.081, "call": 0.839, "raise_small": 0.06, "raise_big": 0.02},
+    "1360899": {"fold": 0.199, "call": 0.801},
+    "1360963": {"fold": 0.283, "call": 0.717},
+    "2540544": {"call": 0.998, "raise_small": 0.001, "raise_big": 0.001},
+    "1362051": {"fold": 0.211, "call": 0.789},
+    "1462272": {"call": 0.606, "raise_small": 0.265, "raise_big": 0.129},
+    "2543616": {"call": 0.3, "raise_small": 0.231, "raise_big": 0.47},
+    "2543618": {"fold": 0.026, "call": 0.08, "raise_small": 0.593, "raise_big": 0.301},
+    "1462849": {"fold": 0.303, "call": 0.509, "raise_small": 0.14, "raise_big": 0.047},
+    "1462784": {"call": 0.361, "raise_small": 0.432, "raise_big": 0.207},
+    "1463361": {"fold": 0.14, "call": 0.791, "raise_small": 0.056, "raise_big": 0.013},
+    "1344066": {"fold": 0.059, "call": 0.293, "raise_small": 0.336, "raise_big": 0.312},
+    "2408960": {"call": 0.589, "raise_small": 0.241, "raise_big": 0.169},
+    "3461632": {"call": 0.815, "raise_small": 0.153, "raise_big": 0.032},
+    "2409472": {"call": 0.99, "raise_small": 0.005, "raise_big": 0.005},
+    "2408448": {"call": 0.188, "raise_small": 0.174, "raise_big": 0.638},
+    "3609088": {"call": 0.659, "raise_small": 0.266, "raise_big": 0.075},
+    "2527746": {"fold": 0.025, "call": 0.96, "raise_small": 0.012, "raise_big": 0.004},
+    "2527810": {"fold": 0.055, "call": 0.883, "raise_small": 0.053, "raise_big": 0.009},
+    "1344065": {"fold": 0.129, "call": 0.82, "raise_small": 0.036, "raise_big": 0.015},
+    "2768896": {"call": 0.674, "raise_small": 0.185, "raise_big": 0.142},
+    "3817472": {"call": 0.85, "raise_small": 0.1, "raise_big": 0.05},
+    "3817474": {"fold": 0.14, "call": 0.756, "raise_small": 0.083, "raise_big": 0.021},
+    "2768898": {"fold": 0.03, "call": 0.13, "raise_small": 0.631, "raise_big": 0.208},
+    "2769408": {"call": 0.783, "raise_small": 0.115, "raise_big": 0.102},
+    "1721346": {"fold": 0.251, "call": 0.597, "raise_small": 0.1, "raise_big": 0.052},
+    "1345153": {"fold": 0.111, "call": 0.834, "raise_small": 0.039, "raise_big": 0.016},
+    "2262081": {"fold": 0.49, "call": 0.32, "raise_small": 0.124, "raise_big": 0.066},
+    "1622017": {"fold": 0.138, "call": 0.666, "raise_small": 0.111, "raise_big": 0.085},
+    "2671169": {"fold": 0.242, "call": 0.674, "raise_small": 0.07, "raise_big": 0.013},
+    "1622019": {"fold": 0.199, "call": 0.801},
+    "1622531": {"fold": 0.086, "call": 0.914},
+    "1737794": {"fold": 0.038, "call": 0.777, "raise_small": 0.12, "raise_big": 0.065},
+    "3424768": {"call": 0.959, "raise_small": 0.024, "raise_big": 0.017},
+    "2524225": {"fold": 0.692, "call": 0.255, "raise_small": 0.041, "raise_big": 0.012},
+    "3854336": {"call": 0.271, "raise_small": 0.417, "raise_big": 0.312},
+    "3604480": {"call": 0.33, "raise_small": 0.297, "raise_big": 0.373},
+    "3473409": {"fold": 0.098, "call": 0.424, "raise_small": 0.337, "raise_big": 0.141},
+    "3604482": {"fold": 0.043, "call": 0.7, "raise_small": 0.202, "raise_big": 0.056},
+    "2524226": {"fold": 0.056, "call": 0.819, "raise_small": 0.091, "raise_big": 0.033},
+    "3572224": {"call": 0.823, "raise_small": 0.159, "raise_big": 0.019},
+    "2769410": {"fold": 0.041, "call": 0.94, "raise_small": 0.013, "raise_big": 0.006},
+    "1720897": {"fold": 0.33, "call": 0.572, "raise_small": 0.067, "raise_big": 0.031},
+    "1721409": {"fold": 0.131, "call": 0.824, "raise_small": 0.032, "raise_big": 0.013},
+    "2556416": {"call": 0.357, "raise_small": 0.414, "raise_big": 0.229},
+    "2294849": {"fold": 0.44, "call": 0.337, "raise_small": 0.137, "raise_big": 0.086},
+    "2277376": {"call": 0.27, "raise_small": 0.199, "raise_big": 0.531},
+    "3325952": {"call": 0.7, "raise_small": 0.21, "raise_big": 0.09},
+    "1721410": {"fold": 0.168, "call": 0.634, "raise_small": 0.144, "raise_big": 0.054},
+    "3588608": {"call": 0.681, "raise_small": 0.285, "raise_big": 0.034},
+    "3866624": {"call": 0.086, "raise_small": 0.119, "raise_big": 0.795},
+    "3866626": {"fold": 0.015, "call": 0.529, "raise_small": 0.323, "raise_big": 0.133},
+    "2675200": {"call": 0.725, "raise_small": 0.164, "raise_big": 0.111},
+    "3707392": {"call": 0.7, "raise_small": 0.274, "raise_big": 0.026},
+    "2675712": {"call": 0.992, "raise_small": 0.004, "raise_big": 0.004},
+    "2772992": {"call": 0.694, "raise_small": 0.171, "raise_big": 0.135},
+    "2658305": {"fold": 0.06, "call": 0.622, "raise_small": 0.187, "raise_big": 0.132},
+    "2773504": {"call": 0.769, "raise_small": 0.14, "raise_big": 0.091},
+    "1232896": {"call": 0.34, "raise_small": 0.279, "raise_big": 0.381},
+    "2281472": {"call": 0.65, "raise_small": 0.174, "raise_big": 0.177},
+    "3330048": {"call": 0.792, "raise_small": 0.118, "raise_big": 0.09},
+    "1232898": {"fold": 0.147, "call": 0.396, "raise_small": 0.21, "raise_big": 0.247},
+    "1724931": {"fold": 0.224, "call": 0.776},
+    "2393154": {"fold": 0.236, "call": 0.601, "raise_small": 0.112, "raise_big": 0.051},
+    "2822656": {"call": 0.333, "raise_small": 0.268, "raise_big": 0.399},
+    "2413633": {"fold": 0.423, "call": 0.355, "raise_small": 0.134, "raise_big": 0.088},
+    "1360961": {"fold": 0.23, "call": 0.709, "raise_small": 0.05, "raise_big": 0.012},
+    "1737730": {"fold": 0.026, "call": 0.68, "raise_small": 0.215, "raise_big": 0.078},
+    "2396160": {"call": 0.634, "raise_small": 0.191, "raise_big": 0.175},
+    "2789377": {"fold": 0.077, "call": 0.685, "raise_small": 0.147, "raise_big": 0.091},
+    "2396162": {"fold": 0.023, "call": 0.169, "raise_small": 0.644, "raise_big": 0.165},
+    "2789891": {"fold": 0.33, "call": 0.67},
+    "2789955": {"fold": 0.485, "call": 0.515},
+    "2397250": {"fold": 0.181, "call": 0.633, "raise_small": 0.125, "raise_big": 0.061},
+    "2789889": {"fold": 0.254, "call": 0.687, "raise_small": 0.049, "raise_big": 0.009},
+    "2789953": {"fold": 0.271, "call": 0.616, "raise_small": 0.096, "raise_big": 0.017},
+    "1332290": {"fold": 0.426, "call": 0.289, "raise_small": 0.15, "raise_big": 0.135},
+    "1332226": {"fold": 0.312, "call": 0.345, "raise_small": 0.172, "raise_big": 0.172},
+    "1331712": {"call": 0.378, "raise_small": 0.345, "raise_big": 0.277},
+    "2396672": {"call": 0.823, "raise_small": 0.101, "raise_big": 0.076},
+    "1725505": {"fold": 0.212, "call": 0.598, "raise_small": 0.144, "raise_big": 0.047},
+    "1726081": {"fold": 0.282, "call": 0.436, "raise_small": 0.2, "raise_big": 0.082},
+    "2638914": {"fold": 0.256, "call": 0.613, "raise_small": 0.085, "raise_big": 0.046},
+    "3686912": {"call": 0.913, "raise_small": 0.08, "raise_big": 0.007},
+    "2801666": {"fold": 0.009, "call": 0.03, "raise_small": 0.142, "raise_big": 0.819},
+    "2654787": {"fold": 0.435, "call": 0.565},
+    "3821569": {"fold": 0.186, "call": 0.46, "raise_small": 0.266, "raise_big": 0.088},
+    "2769475": {"fold": 0.522, "call": 0.478},
+    "3489793": {"fold": 0.045, "call": 0.837, "raise_small": 0.056, "raise_big": 0.061},
+    "2424833": {"fold": 0.074, "call": 0.602, "raise_small": 0.184, "raise_big": 0.14},
+    "2424835": {"fold": 0.355, "call": 0.645},
+    "2425347": {"fold": 0.285, "call": 0.715},
+    "1376257": {"fold": 0.233, "call": 0.392, "raise_small": 0.165, "raise_big": 0.21},
+    "2425345": {"fold": 0.201, "call": 0.636, "raise_small": 0.122, "raise_big": 0.041},
+    "2425409": {"fold": 0.376, "call": 0.464, "raise_small": 0.116, "raise_big": 0.045},
+    "1376259": {"fold": 0.353, "call": 0.647},
+    "1376771": {"fold": 0.1, "call": 0.9},
+    "2671682": {"fold": 0.023, "call": 0.85, "raise_small": 0.1, "raise_big": 0.028},
+    "1769472": {"call": 0.274, "raise_small": 0.068, "raise_big": 0.658},
+    "2818048": {"call": 0.047, "raise_small": 0.068, "raise_big": 0.885},
+    "2818050": {"fold": 0.005, "call": 0.021, "raise_small": 0.074, "raise_big": 0.899},
+    "1523712": {"call": 0.245, "raise_small": 0.147, "raise_big": 0.608},
+    "2576384": {"call": 0.111, "raise_small": 0.177, "raise_big": 0.712},
+    "3624960": {"call": 0.045, "raise_small": 0.096, "raise_big": 0.859},
+    "2576386": {"fold": 0.085, "call": 0.101, "raise_small": 0.165, "raise_big": 0.649},
+    "1622593": {"fold": 0.229, "call": 0.646, "raise_small": 0.086, "raise_big": 0.038},
+    "2658819": {"fold": 0.348, "call": 0.652},
+    "2658883": {"fold": 0.409, "call": 0.591},
+    "1609729": {"fold": 0.246, "call": 0.458, "raise_small": 0.156, "raise_big": 0.14},
+    "1462274": {"fold": 0.233, "call": 0.336, "raise_small": 0.314, "raise_big": 0.118},
+    "2658817": {"fold": 0.263, "call": 0.693, "raise_small": 0.035, "raise_big": 0.009},
+    "2658881": {"fold": 0.197, "call": 0.662, "raise_small": 0.12, "raise_big": 0.021},
+    "1609731": {"fold": 0.23, "call": 0.77},
+    "1610243": {"fold": 0.16, "call": 0.84},
+    "2544194": {"fold": 0.098, "call": 0.76, "raise_small": 0.113, "raise_big": 0.029},
+    "1462786": {"fold": 0.284, "call": 0.248, "raise_small": 0.243, "raise_big": 0.225},
+    "2544128": {"call": 0.833, "raise_small": 0.09, "raise_big": 0.077},
+    "1610819": {"fold": 0.169, "call": 0.831},
+    "3751936": {"call": 0.078, "raise_small": 0.087, "raise_big": 0.835},
+    "3751938": {"fold": 0.02, "call": 0.474, "raise_small": 0.331, "raise_big": 0.174},
+    "2409027": {"fold": 0.436, "call": 0.564},
+    "2409025": {"fold": 0.267, "call": 0.604, "raise_small": 0.098, "raise_big": 0.031},
+    "1360451": {"fold": 0.379, "call": 0.621},
+    "1360449": {"fold": 0.237, "call": 0.608, "raise_small": 0.123, "raise_big": 0.032},
+    "1361537": {"fold": 0.268, "call": 0.571, "raise_small": 0.113, "raise_big": 0.048},
+    "2655297": {"fold": 0.739, "call": 0.204, "raise_small": 0.045, "raise_big": 0.012},
+    "2638403": {"fold": 0.59, "call": 0.41},
+    "3719680": {"call": 0.614, "raise_small": 0.349, "raise_big": 0.037},
+    "2638913": {"fold": 0.592, "call": 0.334, "raise_small": 0.061, "raise_big": 0.013},
+    "2773506": {"fold": 0.128, "call": 0.811, "raise_small": 0.044, "raise_big": 0.017},
+    "2245122": {"fold": 0.451, "call": 0.475, "raise_small": 0.048, "raise_big": 0.027},
+    "1507328": {"call": 0.118, "raise_small": 0.089, "raise_big": 0.792},
+    "2555904": {"call": 0.095, "raise_small": 0.088, "raise_big": 0.817},
+    "2555906": {"fold": 0.019, "call": 0.043, "raise_small": 0.258, "raise_big": 0.679},
+    "2556418": {"fold": 0.029, "call": 0.911, "raise_small": 0.042, "raise_big": 0.017},
+    "1507840": {"call": 0.026, "raise_small": 0.153, "raise_big": 0.821},
+    "3592194": {"fold": 0.035, "call": 0.809, "raise_small": 0.126, "raise_big": 0.03},
+    "2510849": {"fold": 0.178, "call": 0.235, "raise_small": 0.42, "raise_big": 0.167},
+    "2511361": {"fold": 0.284, "call": 0.614, "raise_small": 0.081, "raise_big": 0.022},
+    "2511425": {"fold": 0.354, "call": 0.475, "raise_small": 0.132, "raise_big": 0.039},
+    "2544130": {"fold": 0.036, "call": 0.929, "raise_small": 0.025, "raise_big": 0.011},
+    "3592704": {"call": 0.764, "raise_small": 0.203, "raise_big": 0.033},
+    "1200128": {"call": 0.624, "raise_small": 0.217, "raise_big": 0.16},
+    "2265088": {"call": 0.725, "raise_small": 0.168, "raise_big": 0.107},
+    "1200130": {"fold": 0.413, "call": 0.204, "raise_small": 0.239, "raise_big": 0.144},
+    "1610241": {"fold": 0.126, "call": 0.771, "raise_small": 0.085, "raise_big": 0.018},
+    "1738369": {"fold": 0.118, "call": 0.824, "raise_small": 0.039, "raise_big": 0.018},
+    "3837954": {"fold": 0.022, "call": 0.821, "raise_small": 0.127, "raise_big": 0.029},
+    "2376770": {"fold": 0.502, "call": 0.286, "raise_small": 0.125, "raise_big": 0.086},
+    "2376258": {"fold": 0.56, "call": 0.32, "raise_small": 0.078, "raise_big": 0.042},
+    "2527235": {"fold": 0.157, "call": 0.843},
+    "2527747": {"fold": 0.304, "call": 0.696},
+    "2527811": {"fold": 0.353, "call": 0.647},
+    "2396674": {"fold": 0.044, "call": 0.933, "raise_small": 0.019, "raise_big": 0.004},
+    "2397184": {"call": 0.99, "raise_small": 0.005, "raise_big": 0.005},
+    "3428353": {"fold": 0.224, "call": 0.116, "raise_small": 0.504, "raise_big": 0.157},
+    "2248705": {"fold": 0.191, "call": 0.217, "raise_small": 0.378, "raise_big": 0.214},
+    "2248707": {"fold": 0.434, "call": 0.566},
+    "2249217": {"fold": 0.296, "call": 0.487, "raise_small": 0.145, "raise_big": 0.072},
+    "2249281": {"fold": 0.302, "call": 0.503, "raise_small": 0.138, "raise_big": 0.056},
+    "2544640": {"call": 0.996, "raise_small": 0.002, "raise_big": 0.002},
+    "3620865": {"fold": 0.03, "call": 0.854, "raise_small": 0.057, "raise_big": 0.06},
+    "2555905": {"fold": 0.046, "call": 0.689, "raise_small": 0.125, "raise_big": 0.14},
+    "1507329": {"fold": 0.182, "call": 0.446, "raise_small": 0.222, "raise_big": 0.15},
+    "1507331": {"fold": 0.33, "call": 0.67},
+    "2556417": {"fold": 0.228, "call": 0.665, "raise_small": 0.079, "raise_big": 0.029},
+    "2556481": {"fold": 0.265, "call": 0.567, "raise_small": 0.139, "raise_big": 0.03},
+    "1507843": {"fold": 0.1, "call": 0.9},
+    "1507907": {"fold": 0.241, "call": 0.759},
+    "1508355": {"fold": 0.203, "call": 0.797},
+    "1509507": {"fold": 0.162, "call": 0.838},
+    "1785856": {"call": 0.204, "raise_small": 0.158, "raise_big": 0.637},
+    "2834432": {"call": 0.043, "raise_small": 0.074, "raise_big": 0.883},
+    "3883008": {"call": 0.056, "raise_small": 0.086, "raise_big": 0.858},
+    "2834434": {"fold": 0.009, "call": 0.033, "raise_small": 0.108, "raise_big": 0.85},
+    "1785858": {"fold": 0.03, "call": 0.477, "raise_small": 0.091, "raise_big": 0.403},
+    "1376769": {"fold": 0.212, "call": 0.523, "raise_small": 0.175, "raise_big": 0.091},
+    "2834944": {"call": 0.137, "raise_small": 0.392, "raise_big": 0.47},
+    "1606723": {"fold": 0.108, "call": 0.892},
+    "2507330": {"fold": 0.425, "call": 0.507, "raise_small": 0.047, "raise_big": 0.022},
+    "2638401": {"fold": 0.444, "call": 0.451, "raise_small": 0.083, "raise_big": 0.021},
+    "2805761": {"fold": 0.074, "call": 0.519, "raise_small": 0.184, "raise_big": 0.223},
+    "2805763": {"fold": 0.246, "call": 0.754},
+    "2806275": {"fold": 0.274, "call": 0.726},
+    "2806273": {"fold": 0.27, "call": 0.61, "raise_small": 0.096, "raise_big": 0.024},
+    "2380288": {"call": 0.87, "raise_small": 0.062, "raise_big": 0.068},
+    "2380354": {"fold": 0.598, "call": 0.188, "raise_small": 0.115, "raise_big": 0.099},
+    "2806337": {"fold": 0.262, "call": 0.568, "raise_small": 0.135, "raise_big": 0.035},
+    "3445248": {"call": 0.866, "raise_small": 0.115, "raise_big": 0.019},
+    "2806849": {"fold": 0.475, "call": 0.345, "raise_small": 0.133, "raise_big": 0.048},
+    "1626113": {"fold": 0.197, "call": 0.543, "raise_small": 0.143, "raise_big": 0.117},
+    "2248704": {"call": 0.908, "raise_small": 0.052, "raise_big": 0.039},
+    "1200642": {"fold": 0.272, "call": 0.161, "raise_small": 0.234, "raise_big": 0.333},
+    "1627203": {"fold": 0.176, "call": 0.824},
+    "1626689": {"fold": 0.262, "call": 0.498, "raise_small": 0.184, "raise_big": 0.056},
+    "1200640": {"call": 0.307, "raise_small": 0.371, "raise_big": 0.322},
+    "1627201": {"fold": 0.165, "call": 0.706, "raise_small": 0.096, "raise_big": 0.034},
+    "1740800": {"call": 0.166, "raise_small": 0.153, "raise_big": 0.68},
+    "2789378": {"fold": 0.01, "call": 0.039, "raise_small": 0.336, "raise_big": 0.615},
+    "2789379": {"fold": 0.322, "call": 0.678},
+    "1740801": {"fold": 0.196, "call": 0.516, "raise_small": 0.165, "raise_big": 0.123},
+    "1740802": {"fold": 0.014, "call": 0.652, "raise_small": 0.063, "raise_big": 0.272},
+    "1740803": {"fold": 0.105, "call": 0.895},
+    "1741315": {"fold": 0.096, "call": 0.904},
+    "1741379": {"fold": 0.281, "call": 0.719},
+    "1741378": {"fold": 0.024, "call": 0.142, "raise_small": 0.287, "raise_big": 0.548},
+    "1741313": {"fold": 0.123, "call": 0.709, "raise_small": 0.104, "raise_big": 0.064},
+    "1741314": {"fold": 0.015, "call": 0.063, "raise_small": 0.215, "raise_big": 0.706},
+    "1741377": {"fold": 0.294, "call": 0.451, "raise_small": 0.165, "raise_big": 0.09},
+    "1741312": {"call": 0.05, "raise_small": 0.268, "raise_big": 0.682},
+    "1741889": {"fold": 0.173, "call": 0.667, "raise_small": 0.102, "raise_big": 0.058},
+    "1741890": {"fold": 0.166, "call": 0.424, "raise_small": 0.233, "raise_big": 0.177},
+    "3690496": {"call": 0.898, "raise_small": 0.063, "raise_big": 0.039},
+    "2641921": {"fold": 0.11, "call": 0.321, "raise_small": 0.342, "raise_big": 0.226},
+    "1593345": {"fold": 0.4, "call": 0.263, "raise_small": 0.184, "raise_big": 0.153},
+    "1593347": {"fold": 0.414, "call": 0.586},
+    "2642433": {"fold": 0.318, "call": 0.591, "raise_small": 0.071, "raise_big": 0.021},
+    "1593859": {"fold": 0.126, "call": 0.874},
+    "3428352": {"call": 0.929, "raise_small": 0.037, "raise_big": 0.034},
+    "3428354": {"fold": 0.379, "call": 0.524, "raise_small": 0.06, "raise_big": 0.038},
+    "1737795": {"fold": 0.209, "call": 0.791},
+    "1491456": {"call": 0.028, "raise_small": 0.116, "raise_big": 0.856},
+    "3330050": {"fold": 0.086, "call": 0.675, "raise_small": 0.185, "raise_big": 0.053},
+    "2245632": {"call": 0.974, "raise_small": 0.013, "raise_big": 0.013},
+    "2396161": {"fold": 0.088, "call": 0.34, "raise_small": 0.359, "raise_big": 0.213},
+    "2772994": {"fold": 0.081, "call": 0.125, "raise_small": 0.573, "raise_big": 0.221},
+    "2396163": {"fold": 0.137, "call": 0.863},
+    "2396675": {"fold": 0.404, "call": 0.596},
+    "3608576": {"call": 0.202, "raise_small": 0.258, "raise_big": 0.54},
+    "1507330": {"fold": 0.017, "call": 0.613, "raise_small": 0.048, "raise_big": 0.322},
+    "2556928": {"call": 0.974, "raise_small": 0.013, "raise_big": 0.013},
+    "3444737": {"fold": 0.123, "call": 0.487, "raise_small": 0.346, "raise_big": 0.044},
+    "3313666": {"fold": 0.263, "call": 0.571, "raise_small": 0.152, "raise_big": 0.014},
+    "2265090": {"fold": 0.038, "call": 0.206, "raise_small": 0.59, "raise_big": 0.166},
+    "2396739": {"fold": 0.417, "call": 0.583},
+    "2266178": {"fold": 0.271, "call": 0.404, "raise_small": 0.181, "raise_big": 0.144},
+    "2396673": {"fold": 0.256, "call": 0.631, "raise_small": 0.08, "raise_big": 0.033},
+    "1212928": {"call": 0.249, "raise_small": 0.229, "raise_big": 0.522},
+    "2265600": {"call": 0.798, "raise_small": 0.128, "raise_big": 0.074},
+    "2507842": {"fold": 0.369, "call": 0.427, "raise_small": 0.113, "raise_big": 0.091},
+    "1606210": {"fold": 0.015, "call": 0.167, "raise_small": 0.215, "raise_big": 0.603},
+    "2523714": {"fold": 0.053, "call": 0.909, "raise_small": 0.028, "raise_big": 0.01},
+    "1376256": {"call": 0.138, "raise_small": 0.116, "raise_big": 0.746},
+    "2424832": {"call": 0.132, "raise_small": 0.093, "raise_big": 0.776},
+    "3489792": {"call": 0.116, "raise_small": 0.106, "raise_big": 0.779},
+    "2425344": {"call": 0.427, "raise_small": 0.364, "raise_big": 0.209},
+    "1495040": {"call": 0.197, "raise_small": 0.241, "raise_big": 0.562},
+    "1495042": {"fold": 0.043, "call": 0.506, "raise_small": 0.095, "raise_big": 0.356},
+    "1478659": {"fold": 0.197, "call": 0.803},
+    "1479171": {"fold": 0.134, "call": 0.866},
+    "1479235": {"fold": 0.232, "call": 0.768},
+    "1479169": {"fold": 0.078, "call": 0.807, "raise_small": 0.076, "raise_big": 0.039},
+    "1479233": {"fold": 0.288, "call": 0.481, "raise_small": 0.165, "raise_big": 0.065},
+    "1495552": {"call": 0.087, "raise_small": 0.3, "raise_big": 0.614},
+    "1213443": {"fold": 0.197, "call": 0.803},
+    "2555907": {"fold": 0.295, "call": 0.705},
+    "2556419": {"fold": 0.335, "call": 0.665},
+    "1507841": {"fold": 0.162, "call": 0.681, "raise_small": 0.107, "raise_big": 0.05},
+    "1507905": {"fold": 0.205, "call": 0.568, "raise_small": 0.183, "raise_big": 0.045},
+    "2641920": {"call": 0.808, "raise_small": 0.111, "raise_big": 0.081},
+    "2642432": {"call": 0.821, "raise_small": 0.1, "raise_big": 0.079},
+    "2802178": {"fold": 0.004, "call": 0.98, "raise_small": 0.012, "raise_big": 0.004},
+    "3621376": {"call": 0.635, "raise_small": 0.257, "raise_big": 0.108},
+    "2540610": {"fold": 0.035, "call": 0.833, "raise_small": 0.11, "raise_big": 0.022},
+    "3723266": {"fold": 0.041, "call": 0.796, "raise_small": 0.12, "raise_big": 0.044},
+    "1591426": {"fold": 0.349, "call": 0.401, "raise_small": 0.153, "raise_big": 0.097},
+    "1590275": {"fold": 0.053, "call": 0.947},
+    "2802688": {"call": 0.989, "raise_small": 0.005, "raise_big": 0.005},
+    "1347584": {"call": 0.201, "raise_small": 0.314, "raise_big": 0.486},
+    "2675203": {"fold": 0.31, "call": 0.69},
+    "2675267": {"fold": 0.536, "call": 0.464},
+    "1347586": {"fold": 0.021, "call": 0.442, "raise_small": 0.133, "raise_big": 0.403},
+    "1626115": {"fold": 0.137, "call": 0.863},
+    "1626627": {"fold": 0.231, "call": 0.769},
+    "1348098": {"fold": 0.028, "call": 0.139, "raise_small": 0.307, "raise_big": 0.525},
+    "2396738": {"fold": 0.128, "call": 0.714, "raise_small": 0.127, "raise_big": 0.03},
+    "2675777": {"fold": 0.369, "call": 0.457, "raise_small": 0.134, "raise_big": 0.04},
+    "1737731": {"fold": 0.032, "call": 0.968},
+    "1738883": {"fold": 0.186, "call": 0.814},
+    "1228800": {"call": 0.168, "raise_small": 0.178, "raise_big": 0.654},
+    "2277378": {"fold": 0.019, "call": 0.158, "raise_small": 0.357, "raise_big": 0.466},
+    "2277888": {"call": 0.599, "raise_small": 0.208, "raise_big": 0.193},
+    "1229314": {"fold": 0.021, "call": 0.167, "raise_small": 0.293, "raise_big": 0.519},
+    "1229890": {"fold": 0.164, "call": 0.395, "raise_small": 0.283, "raise_big": 0.158},
+    "1622595": {"fold": 0.306, "call": 0.694},
+    "3817473": {"fold": 0.209, "call": 0.382, "raise_small": 0.301, "raise_big": 0.109},
+    "1606658": {"fold": 0.022, "call": 0.857, "raise_small": 0.085, "raise_big": 0.036},
+    "2641923": {"fold": 0.366, "call": 0.634},
+    "2642435": {"fold": 0.279, "call": 0.721},
+    "2642499": {"fold": 0.442, "call": 0.558},
+    "2658307": {"fold": 0.381, "call": 0.619},
+    "1359872": {"call": 0.127, "raise_small": 0.142, "raise_big": 0.731},
+    "2408450": {"fold": 0.014, "call": 0.065, "raise_small": 0.384, "raise_big": 0.537},
+    "1359874": {"fold": 0.02, "call": 0.606, "raise_small": 0.032, "raise_big": 0.343},
+    "1360898": {"fold": 0.136, "call": 0.496, "raise_small": 0.223, "raise_big": 0.146},
+    "3850752": {"call": 0.58, "raise_small": 0.373, "raise_big": 0.047},
+    "2277377": {"fold": 0.108, "call": 0.56, "raise_small": 0.241, "raise_big": 0.092},
+    "2277379": {"fold": 0.348, "call": 0.652},
+    "2277889": {"fold": 0.245, "call": 0.622, "raise_small": 0.097, "raise_big": 0.036},
+    "2277953": {"fold": 0.284, "call": 0.505, "raise_small": 0.154, "raise_big": 0.057},
+    "2408962": {"fold": 0.015, "call": 0.97, "raise_small": 0.012, "raise_big": 0.004},
+    "2441216": {"call": 0.048, "raise_small": 0.074, "raise_big": 0.878},
+    "3489794": {"fold": 0.042, "call": 0.61, "raise_small": 0.225, "raise_big": 0.122},
+    "2441728": {"call": 0.175, "raise_small": 0.384, "raise_big": 0.44},
+    "1360386": {"fold": 0.028, "call": 0.132, "raise_small": 0.247, "raise_big": 0.593},
+    "1360384": {"call": 0.059, "raise_small": 0.16, "raise_big": 0.781},
+    "3346432": {"call": 0.341, "raise_small": 0.253, "raise_big": 0.406},
+    "2572289": {"fold": 0.055, "call": 0.619, "raise_small": 0.119, "raise_big": 0.206},
+    "2572291": {"fold": 0.367, "call": 0.633},
+    "2572803": {"fold": 0.418, "call": 0.582},
+    "1490945": {"fold": 0.141, "call": 0.704, "raise_small": 0.088, "raise_big": 0.067},
+    "2572801": {"fold": 0.159, "call": 0.637, "raise_small": 0.149, "raise_big": 0.055},
+    "2572865": {"fold": 0.19, "call": 0.53, "raise_small": 0.201, "raise_big": 0.079},
+    "1491459": {"fold": 0.103, "call": 0.897},
+    "1491523": {"fold": 0.29, "call": 0.71},
+    "2655232": {"call": 1.0, "raise_small": 0.0, "raise_big": 0.0},
+    "1491457": {"fold": 0.052, "call": 0.888, "raise_small": 0.041, "raise_big": 0.018},
+    "1491521": {"fold": 0.21, "call": 0.682, "raise_small": 0.082, "raise_big": 0.027},
+    "1492033": {"fold": 0.132, "call": 0.832, "raise_small": 0.028, "raise_big": 0.008},
+    "1363969": {"fold": 0.317, "call": 0.367, "raise_small": 0.167, "raise_big": 0.149},
+    "2544706": {"fold": 0.084, "call": 0.754, "raise_small": 0.12, "raise_big": 0.042},
+    "1364547": {"fold": 0.443, "call": 0.557},
+    "2687489": {"fold": 0.173, "call": 0.746, "raise_small": 0.063, "raise_big": 0.019},
+    "1606211": {"fold": 0.256, "call": 0.744},
+    "1606659": {"fold": 0.048, "call": 0.952},
+    "1607811": {"fold": 0.096, "call": 0.904},
+    "1593344": {"call": 0.52, "raise_small": 0.267, "raise_big": 0.214},
+    "1232897": {"fold": 0.347, "call": 0.257, "raise_small": 0.232, "raise_big": 0.164},
+    "1593346": {"fold": 0.116, "call": 0.47, "raise_small": 0.202, "raise_big": 0.212},
+    "1233475": {"fold": 0.271, "call": 0.729},
+    "1593856": {"call": 0.299, "raise_small": 0.361, "raise_big": 0.34},
+    "2277890": {"fold": 0.026, "call": 0.946, "raise_small": 0.024, "raise_big": 0.004},
+    "1609728": {"call": 0.2, "raise_small": 0.194, "raise_big": 0.606},
+    "1364481": {"fold": 0.203, "call": 0.65, "raise_small": 0.105, "raise_big": 0.043},
+    "1610818": {"fold": 0.098, "call": 0.514, "raise_small": 0.281, "raise_big": 0.107},
+    "1364545": {"fold": 0.358, "call": 0.414, "raise_small": 0.15, "raise_big": 0.078},
+    "1610240": {"call": 0.07, "raise_small": 0.261, "raise_big": 0.669},
+    "2658816": {"call": 0.735, "raise_small": 0.16, "raise_big": 0.105},
+    "1365057": {"fold": 0.242, "call": 0.673, "raise_small": 0.062, "raise_big": 0.023},
+    "1376835": {"fold": 0.226, "call": 0.774},
+    "1377345": {"fold": 0.138, "call": 0.73, "raise_small": 0.098, "raise_big": 0.034},
+    "1376833": {"fold": 0.177, "call": 0.567, "raise_small": 0.188, "raise_big": 0.068},
+    "1377921": {"fold": 0.219, "call": 0.579, "raise_small": 0.138, "raise_big": 0.064},
+    "3555840": {"call": 0.962, "raise_small": 0.033, "raise_big": 0.005},
+    "2769985": {"fold": 0.45, "call": 0.43, "raise_small": 0.103, "raise_big": 0.017},
+    "2540099": {"fold": 0.491, "call": 0.509},
+    "1490947": {"fold": 0.119, "call": 0.881},
+    "1491971": {"fold": 0.161, "call": 0.839},
+    "1492035": {"fold": 0.173, "call": 0.827},
+    "1493123": {"fold": 0.19, "call": 0.81},
+    "2379777": {"fold": 0.206, "call": 0.232, "raise_small": 0.392, "raise_big": 0.17},
+    "2658306": {"fold": 0.013, "call": 0.066, "raise_small": 0.526, "raise_big": 0.395},
+    "3457536": {"call": 0.764, "raise_small": 0.205, "raise_big": 0.03},
+    "2507841": {"fold": 0.572, "call": 0.312, "raise_small": 0.083, "raise_big": 0.033},
+    "1328194": {"fold": 0.57, "call": 0.362, "raise_small": 0.054, "raise_big": 0.014},
+    "3428864": {"call": 0.922, "raise_small": 0.046, "raise_big": 0.033},
+    "2818562": {"fold": 0.002, "call": 0.904, "raise_small": 0.07, "raise_big": 0.024},
+    "1769984": {"call": 0.006, "raise_small": 0.126, "raise_big": 0.868},
+    "2818560": {"call": 0.15, "raise_small": 0.436, "raise_big": 0.414},
+    "2642944": {"call": 0.985, "raise_small": 0.008, "raise_big": 0.008},
+    "2396737": {"fold": 0.239, "call": 0.528, "raise_small": 0.168, "raise_big": 0.065},
+    "1345666": {"fold": 0.288, "call": 0.443, "raise_small": 0.195, "raise_big": 0.073},
+    "3723776": {"call": 0.747, "raise_small": 0.217, "raise_big": 0.037},
+    "1591427": {"fold": 0.425, "call": 0.575},
+    "3735553": {"fold": 0.095, "call": 0.76, "raise_small": 0.096, "raise_big": 0.049},
+    "2510851": {"fold": 0.277, "call": 0.723},
+    "2511363": {"fold": 0.403, "call": 0.597},
+    "2658818": {"fold": 0.017, "call": 0.972, "raise_small": 0.009, "raise_big": 0.002},
+    "2511937": {"fold": 0.499, "call": 0.363, "raise_small": 0.098, "raise_big": 0.04},
+    "1724416": {"call": 0.5, "raise_small": 0.255, "raise_big": 0.246},
+    "3854848": {"call": 0.662, "raise_small": 0.29, "raise_big": 0.048},
+    "2789954": {"fold": 0.028, "call": 0.89, "raise_small": 0.071, "raise_big": 0.011},
+    "1724928": {"call": 0.229, "raise_small": 0.411, "raise_big": 0.36},
+    "1233985": {"fold": 0.183, "call": 0.632, "raise_small": 0.126, "raise_big": 0.059},
+    "1626112": {"call": 0.23, "raise_small": 0.179, "raise_big": 0.591},
+    "1626624": {"call": 0.075, "raise_small": 0.367, "raise_big": 0.557},
+    "1742465": {"fold": 0.323, "call": 0.406, "raise_small": 0.158, "raise_big": 0.113},
+    "3870721": {"fold": 0.062, "call": 0.827, "raise_small": 0.061, "raise_big": 0.05},
+    "3608578": {"fold": 0.037, "call": 0.695, "raise_small": 0.207, "raise_big": 0.061},
+    "2818051": {"fold": 0.28, "call": 0.72},
+    "2818563": {"fold": 0.466, "call": 0.534},
+    "1507842": {"fold": 0.03, "call": 0.06, "raise_small": 0.197, "raise_big": 0.713},
+    "1770499": {"fold": 0.049, "call": 0.951},
+    "1770563": {"fold": 0.218, "call": 0.782},
+    "1507906": {"fold": 0.035, "call": 0.094, "raise_small": 0.207, "raise_big": 0.664},
+    "1771651": {"fold": 0.161, "call": 0.839},
+    "2245186": {"fold": 0.607, "call": 0.199, "raise_small": 0.115, "raise_big": 0.079},
+    "1495041": {"fold": 0.253, "call": 0.427, "raise_small": 0.193, "raise_big": 0.127},
+    "2544129": {"fold": 0.275, "call": 0.64, "raise_small": 0.066, "raise_big": 0.019},
+    "2544193": {"fold": 0.175, "call": 0.647, "raise_small": 0.143, "raise_big": 0.035},
+    "1495043": {"fold": 0.233, "call": 0.767},
+    "1495555": {"fold": 0.097, "call": 0.903},
+    "1495619": {"fold": 0.213, "call": 0.787},
+    "1495554": {"fold": 0.034, "call": 0.109, "raise_small": 0.313, "raise_big": 0.544},
+    "1495553": {"fold": 0.098, "call": 0.815, "raise_small": 0.065, "raise_big": 0.022},
+    "1495617": {"fold": 0.28, "call": 0.535, "raise_small": 0.143, "raise_big": 0.043},
+    "3821568": {"call": 0.868, "raise_small": 0.084, "raise_big": 0.048},
+    "3821570": {"fold": 0.301, "call": 0.53, "raise_small": 0.143, "raise_big": 0.026},
+    "2281475": {"fold": 0.444, "call": 0.556},
+    "2282049": {"fold": 0.237, "call": 0.514, "raise_small": 0.196, "raise_big": 0.054},
+    "2802242": {"fold": 0.012, "call": 0.829, "raise_small": 0.142, "raise_big": 0.016},
+    "2642497": {"fold": 0.262, "call": 0.539, "raise_small": 0.161, "raise_big": 0.037},
+    "1478656": {"call": 0.164, "raise_small": 0.187, "raise_big": 0.649},
+    "1479170": {"fold": 0.025, "call": 0.095, "raise_small": 0.295, "raise_big": 0.584},
+    "1479234": {"fold": 0.043, "call": 0.125, "raise_small": 0.258, "raise_big": 0.574},
+    "1479168": {"call": 0.072, "raise_small": 0.288, "raise_big": 0.64},
+    "1347585": {"fold": 0.335, "call": 0.323, "raise_small": 0.192, "raise_big": 0.15},
+    "1348097": {"fold": 0.136, "call": 0.717, "raise_small": 0.112, "raise_big": 0.035},
+    "1348161": {"fold": 0.319, "call": 0.479, "raise_small": 0.154, "raise_big": 0.048},
+    "1348673": {"fold": 0.195, "call": 0.688, "raise_small": 0.086, "raise_big": 0.03},
+    "1479747": {"fold": 0.31, "call": 0.69},
+    "3624961": {"fold": 0.071, "call": 0.74, "raise_small": 0.097, "raise_big": 0.092},
+    "3624962": {"fold": 0.038, "call": 0.636, "raise_small": 0.187, "raise_big": 0.139},
+    "2572867": {"fold": 0.483, "call": 0.517},
+    "3625472": {"call": 0.488, "raise_small": 0.327, "raise_big": 0.184},
+    "2573377": {"fold": 0.355, "call": 0.416, "raise_small": 0.162, "raise_big": 0.067},
+    "1638401": {"fold": 0.182, "call": 0.524, "raise_small": 0.14, "raise_big": 0.154},
+    "2686977": {"fold": 0.04, "call": 0.713, "raise_small": 0.133, "raise_big": 0.114},
+    "1638915": {"fold": 0.105, "call": 0.895},
+    "1638913": {"fold": 0.082, "call": 0.722, "raise_small": 0.133, "raise_big": 0.062},
+    "1214595": {"fold": 0.178, "call": 0.822},
+    "1638400": {"call": 0.152, "raise_small": 0.09, "raise_big": 0.758},
+    "2686976": {"call": 0.076, "raise_small": 0.089, "raise_big": 0.835},
+    "3735552": {"call": 0.228, "raise_small": 0.287, "raise_big": 0.485},
+    "2686978": {"fold": 0.016, "call": 0.037, "raise_small": 0.158, "raise_big": 0.789},
+    "1638402": {"fold": 0.013, "call": 0.582, "raise_small": 0.055, "raise_big": 0.349},
+    "2687488": {"call": 0.302, "raise_small": 0.411, "raise_big": 0.287},
+    "2687490": {"fold": 0.01, "call": 0.92, "raise_small": 0.057, "raise_big": 0.013},
+    "2786369": {"fold": 0.613, "call": 0.333, "raise_small": 0.045, "raise_big": 0.01},
+    "3604992": {"call": 0.727, "raise_small": 0.224, "raise_big": 0.05},
+    "1642496": {"call": 0.383, "raise_small": 0.239, "raise_big": 0.378},
+    "2691072": {"call": 0.107, "raise_small": 0.137, "raise_big": 0.756},
+    "3739648": {"call": 0.165, "raise_small": 0.221, "raise_big": 0.614},
+    "1642498": {"fold": 0.19, "call": 0.383, "raise_small": 0.19, "raise_big": 0.237},
+    "1643008": {"call": 0.312, "raise_small": 0.323, "raise_big": 0.365},
+    "1496129": {"fold": 0.183, "call": 0.743, "raise_small": 0.056, "raise_big": 0.018},
+    "1623105": {"fold": 0.153, "call": 0.797, "raise_small": 0.037, "raise_big": 0.014},
+    "1623681": {"fold": 0.178, "call": 0.736, "raise_small": 0.066, "raise_big": 0.02},
+    "3739649": {"fold": 0.081, "call": 0.695, "raise_small": 0.106, "raise_big": 0.117},
+    "2691073": {"fold": 0.126, "call": 0.505, "raise_small": 0.171, "raise_big": 0.197},
+    "2805762": {"fold": 0.024, "call": 0.052, "raise_small": 0.282, "raise_big": 0.642},
+    "2691075": {"fold": 0.52, "call": 0.48},
+    "2691587": {"fold": 0.346, "call": 0.654},
+    "2691651": {"fold": 0.496, "call": 0.504},
+    "2691585": {"fold": 0.311, "call": 0.458, "raise_small": 0.148, "raise_big": 0.082},
+    "2691649": {"fold": 0.313, "call": 0.403, "raise_small": 0.188, "raise_big": 0.095},
+    "3325954": {"fold": 0.025, "call": 0.647, "raise_small": 0.267, "raise_big": 0.061},
+    "1228802": {"fold": 0.023, "call": 0.51, "raise_small": 0.07, "raise_big": 0.397},
+    "2278400": {"call": 0.983, "raise_small": 0.009, "raise_big": 0.009},
+    "2540098": {"fold": 0.028, "call": 0.863, "raise_small": 0.095, "raise_big": 0.014},
+    "3735554": {"fold": 0.021, "call": 0.744, "raise_small": 0.18, "raise_big": 0.054},
+    "2688066": {"fold": 0.047, "call": 0.687, "raise_small": 0.19, "raise_big": 0.077},
+    "3736064": {"call": 0.656, "raise_small": 0.295, "raise_big": 0.049},
+    "2686979": {"fold": 0.29, "call": 0.71},
+    "2687491": {"fold": 0.338, "call": 0.662},
+    "2687555": {"fold": 0.514, "call": 0.486},
+    "2802754": {"fold": 0.007, "call": 0.903, "raise_small": 0.075, "raise_big": 0.015},
+    "2688065": {"fold": 0.456, "call": 0.398, "raise_small": 0.111, "raise_big": 0.035},
+    "1216512": {"call": 0.292, "raise_small": 0.326, "raise_big": 0.381},
+    "2281474": {"fold": 0.079, "call": 0.141, "raise_small": 0.546, "raise_big": 0.234},
+    "1217024": {"call": 0.341, "raise_small": 0.318, "raise_big": 0.342},
+    "2281984": {"call": 0.768, "raise_small": 0.125, "raise_big": 0.107},
+    "2511427": {"fold": 0.446, "call": 0.554},
+    "1462273": {"fold": 0.348, "call": 0.257, "raise_small": 0.238, "raise_big": 0.158},
+    "1462275": {"fold": 0.238, "call": 0.762},
+    "1462787": {"fold": 0.087, "call": 0.913},
+    "1462851": {"fold": 0.246, "call": 0.754},
+    "2511872": {"call": 0.989, "raise_small": 0.006, "raise_big": 0.006},
+    "2511426": {"fold": 0.505, "call": 0.348, "raise_small": 0.091, "raise_big": 0.056},
+    "1463299": {"fold": 0.148, "call": 0.852},
+    "1463363": {"fold": 0.211, "call": 0.789},
+    "1462850": {"fold": 0.254, "call": 0.239, "raise_small": 0.273, "raise_big": 0.234},
+    "1464451": {"fold": 0.205, "call": 0.795},
+    "3817984": {"call": 0.859, "raise_small": 0.13, "raise_big": 0.01},
+    "1626625": {"fold": 0.132, "call": 0.718, "raise_small": 0.115, "raise_big": 0.036},
+    "2834433": {"fold": 0.052, "call": 0.671, "raise_small": 0.133, "raise_big": 0.143},
+    "1770051": {"fold": 0.225, "call": 0.775},
+    "1360450": {"fold": 0.064, "call": 0.209, "raise_small": 0.251, "raise_big": 0.476},
+    "3752448": {"call": 0.669, "raise_small": 0.236, "raise_big": 0.095},
+    "2540609": {"fold": 0.545, "call": 0.33, "raise_small": 0.089, "raise_big": 0.036},
+    "3358720": {"call": 0.138, "raise_small": 0.132, "raise_big": 0.73},
+    "1245186": {"fold": 0.041, "call": 0.515, "raise_small": 0.067, "raise_big": 0.378},
+    "2294272": {"call": 0.454, "raise_small": 0.272, "raise_big": 0.274},
+    "1229315": {"fold": 0.1, "call": 0.9},
+    "1229313": {"fold": 0.092, "call": 0.653, "raise_small": 0.15, "raise_big": 0.105},
+    "1344514": {"fold": 0.109, "call": 0.756, "raise_small": 0.116, "raise_big": 0.019},
+    "2248706": {"fold": 0.357, "call": 0.11, "raise_small": 0.345, "raise_big": 0.188},
+    "2249216": {"call": 0.81, "raise_small": 0.107, "raise_big": 0.083},
+    "2249728": {"call": 0.849, "raise_small": 0.075, "raise_big": 0.075},
+    "1197122": {"fold": 0.762, "call": 0.183, "raise_small": 0.036, "raise_big": 0.019},
+    "3342337": {"fold": 0.142, "call": 0.408, "raise_small": 0.297, "raise_big": 0.152},
+    "3608577": {"fold": 0.138, "call": 0.624, "raise_small": 0.135, "raise_big": 0.103},
+    "2556483": {"fold": 0.372, "call": 0.628},
+    "3751937": {"fold": 0.025, "call": 0.885, "raise_small": 0.052, "raise_big": 0.038},
+    "1638403": {"fold": 0.4, "call": 0.6},
+    "1638979": {"fold": 0.258, "call": 0.742},
+    "2641922": {"fold": 0.071, "call": 0.11, "raise_small": 0.642, "raise_big": 0.177},
+    "1626691": {"fold": 0.22, "call": 0.78},
+    "3883010": {"fold": 0.053, "call": 0.521, "raise_small": 0.245, "raise_big": 0.18},
+    "1769474": {"fold": 0.007, "call": 0.522, "raise_small": 0.023, "raise_big": 0.448},
+    "1769986": {"fold": 0.005, "call": 0.05, "raise_small": 0.147, "raise_big": 0.799},
+    "1770050": {"fold": 0.016, "call": 0.084, "raise_small": 0.28, "raise_big": 0.62},
+    "2819072": {"call": 0.916, "raise_small": 0.042, "raise_big": 0.042},
+    "2802753": {"fold": 0.67, "call": 0.256, "raise_small": 0.058, "raise_big": 0.016},
+    "2822145": {"fold": 0.069, "call": 0.482, "raise_small": 0.175, "raise_big": 0.275},
+    "2822147": {"fold": 0.445, "call": 0.555},
+    "2822659": {"fold": 0.453, "call": 0.547},
+    "2822723": {"fold": 0.5, "call": 0.5},
+    "3493889": {"fold": 0.145, "call": 0.666, "raise_small": 0.101, "raise_big": 0.087},
+    "2445313": {"fold": 0.213, "call": 0.353, "raise_small": 0.197, "raise_big": 0.238},
+    "2445315": {"fold": 0.5, "call": 0.5},
+    "2445827": {"fold": 0.279, "call": 0.721},
+    "2445825": {"fold": 0.276, "call": 0.356, "raise_small": 0.216, "raise_big": 0.151},
+    "2445889": {"fold": 0.256, "call": 0.251, "raise_small": 0.246, "raise_big": 0.246},
+    "2446401": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2658882": {"fold": 0.04, "call": 0.892, "raise_small": 0.06, "raise_big": 0.008},
+    "2822144": {"call": 0.081, "raise_small": 0.114, "raise_big": 0.805},
+    "3870722": {"fold": 0.069, "call": 0.549, "raise_small": 0.265, "raise_big": 0.117},
+    "2822146": {"fold": 0.017, "call": 0.044, "raise_small": 0.134, "raise_big": 0.805},
+    "2822658": {"fold": 0.005, "call": 0.804, "raise_small": 0.137, "raise_big": 0.054},
+    "3871232": {"call": 0.724, "raise_small": 0.183, "raise_big": 0.092},
+    "2790466": {"fold": 0.024, "call": 0.899, "raise_small": 0.06, "raise_big": 0.018},
+    "3477505": {"fold": 0.156, "call": 0.492, "raise_small": 0.248, "raise_big": 0.104},
+    "1348099": {"fold": 0.11, "call": 0.89},
+    "1348163": {"fold": 0.285, "call": 0.715},
+    "1495618": {"fold": 0.108, "call": 0.207, "raise_small": 0.329, "raise_big": 0.357},
+    "1348611": {"fold": 0.212, "call": 0.788},
+    "1349763": {"fold": 0.295, "call": 0.705},
+    "3854338": {"fold": 0.021, "call": 0.771, "raise_small": 0.166, "raise_big": 0.042},
+    "2774016": {"call": 0.976, "raise_small": 0.012, "raise_big": 0.012},
+    "1345667": {"fold": 0.136, "call": 0.864},
+    "2528321": {"fold": 0.497, "call": 0.386, "raise_small": 0.083, "raise_big": 0.035},
+    "2674690": {"fold": 0.028, "call": 0.061, "raise_small": 0.379, "raise_big": 0.533},
+    "2675202": {"fold": 0.017, "call": 0.958, "raise_small": 0.019, "raise_big": 0.006},
+    "1478658": {"fold": 0.016, "call": 0.546, "raise_small": 0.068, "raise_big": 0.369},
+    "1232899": {"fold": 0.418, "call": 0.582},
+    "1233411": {"fold": 0.236, "call": 0.764},
+    "3326464": {"call": 0.721, "raise_small": 0.244, "raise_big": 0.034},
+    "1609730": {"fold": 0.019, "call": 0.63, "raise_small": 0.061, "raise_big": 0.29},
+    "1229312": {"call": 0.152, "raise_small": 0.267, "raise_big": 0.581},
+    "1212994": {"fold": 0.121, "call": 0.253, "raise_small": 0.29, "raise_big": 0.336},
+    "3314176": {"call": 0.87, "raise_small": 0.112, "raise_big": 0.018},
+    "2277891": {"fold": 0.493, "call": 0.507},
+    "1622529": {"fold": 0.063, "call": 0.853, "raise_small": 0.054, "raise_big": 0.03},
+    "2310145": {"fold": 0.138, "call": 0.481, "raise_small": 0.168, "raise_big": 0.212},
+    "2834945": {"fold": 0.227, "call": 0.608, "raise_small": 0.13, "raise_big": 0.035},
+    "1200129": {"fold": 0.461, "call": 0.187, "raise_small": 0.216, "raise_big": 0.136},
+    "1200131": {"fold": 0.354, "call": 0.646},
+    "1200643": {"fold": 0.25, "call": 0.75},
+    "1200707": {"fold": 0.194, "call": 0.806},
+    "2703360": {"call": 0.054, "raise_small": 0.072, "raise_big": 0.874},
+    "2703362": {"fold": 0.018, "call": 0.058, "raise_small": 0.159, "raise_big": 0.765},
+    "2703874": {"fold": 0.015, "call": 0.649, "raise_small": 0.238, "raise_big": 0.099},
+    "2704450": {"fold": 0.09, "call": 0.392, "raise_small": 0.312, "raise_big": 0.207},
+    "2703938": {"fold": 0.054, "call": 0.399, "raise_small": 0.33, "raise_big": 0.217},
+    "2703872": {"call": 0.128, "raise_small": 0.355, "raise_big": 0.518},
+    "2556993": {"fold": 0.435, "call": 0.418, "raise_small": 0.111, "raise_big": 0.036},
+    "3883520": {"call": 0.589, "raise_small": 0.297, "raise_big": 0.114},
+    "2818626": {"fold": 0.032, "call": 0.512, "raise_small": 0.299, "raise_big": 0.157},
+    "1626114": {"fold": 0.035, "call": 0.608, "raise_small": 0.078, "raise_big": 0.279},
+    "2413059": {"fold": 0.376, "call": 0.624},
+    "1491970": {"fold": 0.143, "call": 0.503, "raise_small": 0.236, "raise_big": 0.118},
+    "2769920": {"call": 0.995, "raise_small": 0.003, "raise_big": 0.003},
+    "1363971": {"fold": 0.27, "call": 0.73},
+    "1626626": {"fold": 0.052, "call": 0.127, "raise_small": 0.28, "raise_big": 0.541},
+    "1741891": {"fold": 0.178, "call": 0.822},
+    "2790465": {"fold": 0.489, "call": 0.41, "raise_small": 0.079, "raise_big": 0.022},
+    "2806784": {"call": 0.981, "raise_small": 0.009, "raise_big": 0.009},
+    "2806274": {"fold": 0.015, "call": 0.943, "raise_small": 0.029, "raise_big": 0.014},
+    "2806338": {"fold": 0.066, "call": 0.776, "raise_small": 0.116, "raise_big": 0.042},
+    "2773569": {"fold": 0.302, "call": 0.484, "raise_small": 0.155, "raise_big": 0.059},
+    "2659328": {"call": 0.996, "raise_small": 0.002, "raise_big": 0.002},
+    "2249218": {"fold": 0.635, "call": 0.246, "raise_small": 0.069, "raise_big": 0.05},
+    "2249282": {"fold": 0.348, "call": 0.239, "raise_small": 0.207, "raise_big": 0.206},
+    "3330560": {"call": 0.8, "raise_small": 0.169, "raise_big": 0.031},
+    "1229378": {"fold": 0.06, "call": 0.323, "raise_small": 0.258, "raise_big": 0.359},
+    "1623043": {"fold": 0.063, "call": 0.937},
+    "2282561": {"fold": 0.291, "call": 0.272, "raise_small": 0.231, "raise_big": 0.207},
+    "1229827": {"fold": 0.257, "call": 0.743},
+    "1229377": {"fold": 0.311, "call": 0.443, "raise_small": 0.169, "raise_big": 0.077},
+    "1230465": {"fold": 0.268, "call": 0.464, "raise_small": 0.159, "raise_big": 0.109},
+    "1724418": {"fold": 0.157, "call": 0.355, "raise_small": 0.212, "raise_big": 0.276},
+    "1347587": {"fold": 0.252, "call": 0.748},
+    "1724930": {"fold": 0.106, "call": 0.244, "raise_small": 0.356, "raise_big": 0.293},
+    "1348675": {"fold": 0.289, "call": 0.711},
+    "3756032": {"call": 0.05, "raise_small": 0.108, "raise_big": 0.842},
+    "1724995": {"fold": 0.235, "call": 0.765},
+    "1610242": {"fold": 0.025, "call": 0.104, "raise_small": 0.36, "raise_big": 0.512},
+    "1725443": {"fold": 0.084, "call": 0.916},
+    "1725507": {"fold": 0.262, "call": 0.738},
+    "1610306": {"fold": 0.041, "call": 0.141, "raise_small": 0.248, "raise_big": 0.571},
+    "1726595": {"fold": 0.308, "call": 0.692},
+    "2379779": {"fold": 0.26, "call": 0.74},
+    "2380291": {"fold": 0.405, "call": 0.595},
+    "2380355": {"fold": 0.411, "call": 0.589},
+    "1331201": {"fold": 0.341, "call": 0.191, "raise_small": 0.289, "raise_big": 0.18},
+    "2380289": {"fold": 0.286, "call": 0.575, "raise_small": 0.102, "raise_big": 0.037},
+    "2380353": {"fold": 0.28, "call": 0.489, "raise_small": 0.163, "raise_big": 0.068},
+    "1331203": {"fold": 0.188, "call": 0.812},
+    "1331715": {"fold": 0.072, "call": 0.928},
+    "1331779": {"fold": 0.375, "call": 0.625},
+    "1332291": {"fold": 0.257, "call": 0.743},
+    "2507331": {"fold": 0.516, "call": 0.484},
+    "1245185": {"fold": 0.253, "call": 0.341, "raise_small": 0.206, "raise_big": 0.199},
+    "1246275": {"fold": 0.21, "call": 0.79},
+    "1245761": {"fold": 0.234, "call": 0.424, "raise_small": 0.19, "raise_big": 0.153},
+    "1245697": {"fold": 0.271, "call": 0.469, "raise_small": 0.187, "raise_big": 0.074},
+    "2424834": {"fold": 0.025, "call": 0.039, "raise_small": 0.343, "raise_big": 0.593},
+    "2281986": {"fold": 0.137, "call": 0.762, "raise_small": 0.072, "raise_big": 0.03},
+    "1610307": {"fold": 0.268, "call": 0.732},
+    "1721985": {"fold": 0.204, "call": 0.706, "raise_small": 0.062, "raise_big": 0.028},
+    "3346433": {"fold": 0.136, "call": 0.436, "raise_small": 0.247, "raise_big": 0.18},
+    "2297857": {"fold": 0.225, "call": 0.46, "raise_small": 0.156, "raise_big": 0.16},
+    "2298371": {"fold": 0.529, "call": 0.471},
+    "2298435": {"fold": 0.5, "call": 0.5},
+    "1245187": {"fold": 0.473, "call": 0.527},
+    "2298369": {"fold": 0.286, "call": 0.315, "raise_small": 0.217, "raise_big": 0.182},
+    "1245699": {"fold": 0.179, "call": 0.821},
+    "1623107": {"fold": 0.14, "call": 0.86},
+    "3883009": {"fold": 0.032, "call": 0.891, "raise_small": 0.04, "raise_big": 0.037},
+    "2835009": {"fold": 0.25, "call": 0.461, "raise_small": 0.19, "raise_big": 0.099},
+    "2835521": {"fold": 0.489, "call": 0.362, "raise_small": 0.102, "raise_big": 0.047},
+    "2409026": {"fold": 0.119, "call": 0.67, "raise_small": 0.164, "raise_big": 0.048},
+    "3559936": {"call": 0.915, "raise_small": 0.067, "raise_big": 0.018},
+    "1741827": {"fold": 0.205, "call": 0.795},
+    "3739650": {"fold": 0.025, "call": 0.668, "raise_small": 0.241, "raise_big": 0.066},
+    "2691074": {"fold": 0.034, "call": 0.085, "raise_small": 0.169, "raise_big": 0.711},
+    "2691586": {"fold": 0.028, "call": 0.683, "raise_small": 0.193, "raise_big": 0.096},
+    "3740160": {"call": 0.514, "raise_small": 0.371, "raise_big": 0.115},
+    "2691584": {"call": 0.308, "raise_small": 0.259, "raise_big": 0.433},
+    "1364483": {"fold": 0.142, "call": 0.858},
+    "1364995": {"fold": 0.219, "call": 0.781},
+    "2266112": {"call": 0.973, "raise_small": 0.013, "raise_big": 0.013},
+    "1638977": {"fold": 0.193, "call": 0.607, "raise_small": 0.154, "raise_big": 0.045},
+    "1639489": {"fold": 0.137, "call": 0.776, "raise_small": 0.067, "raise_big": 0.02},
+    "2282050": {"fold": 0.302, "call": 0.392, "raise_small": 0.207, "raise_big": 0.099},
+    "3293696": {"call": 0.969, "raise_small": 0.018, "raise_big": 0.013},
+    "1331713": {"fold": 0.096, "call": 0.794, "raise_small": 0.089, "raise_big": 0.021},
+    "1331777": {"fold": 0.219, "call": 0.52, "raise_small": 0.188, "raise_big": 0.073},
+    "1332289": {"fold": 0.194, "call": 0.688, "raise_small": 0.093, "raise_big": 0.025},
+    "3473408": {"call": 0.5, "raise_small": 0.193, "raise_big": 0.307},
+    "1479682": {"fold": 0.113, "call": 0.511, "raise_small": 0.247, "raise_big": 0.129},
+    "1480834": {"fold": 0.207, "call": 0.358, "raise_small": 0.26, "raise_big": 0.175},
+    "1216513": {"fold": 0.338, "call": 0.346, "raise_small": 0.185, "raise_big": 0.131},
+    "1216515": {"fold": 0.35, "call": 0.65},
+    "3691008": {"call": 0.89, "raise_small": 0.098, "raise_big": 0.012},
+    "2769986": {"fold": 0.233, "call": 0.541, "raise_small": 0.153, "raise_big": 0.073},
+    "2687554": {"fold": 0.059, "call": 0.546, "raise_small": 0.264, "raise_big": 0.131},
+    "3690498": {"fold": 0.161, "call": 0.735, "raise_small": 0.088, "raise_big": 0.016},
+    "1348096": {"call": 0.124, "raise_small": 0.287, "raise_big": 0.589},
+    "2293761": {"fold": 0.095, "call": 0.427, "raise_small": 0.259, "raise_big": 0.219},
+    "3867136": {"call": 0.637, "raise_small": 0.289, "raise_big": 0.074},
+    "2265602": {"fold": 0.128, "call": 0.801, "raise_small": 0.047, "raise_big": 0.024},
+    "2560000": {"call": 0.09, "raise_small": 0.124, "raise_big": 0.787},
+    "2560002": {"fold": 0.029, "call": 0.084, "raise_small": 0.135, "raise_big": 0.753},
+    "1593858": {"fold": 0.122, "call": 0.175, "raise_small": 0.423, "raise_big": 0.28},
+    "3293186": {"fold": 0.523, "call": 0.37, "raise_small": 0.062, "raise_big": 0.045},
+    "2245187": {"fold": 0.615, "call": 0.385},
+    "1628290": {"fold": 0.239, "call": 0.273, "raise_small": 0.254, "raise_big": 0.235},
+    "2818627": {"fold": 0.492, "call": 0.508},
+    "1496067": {"fold": 0.167, "call": 0.833},
+    "1496705": {"fold": 0.264, "call": 0.511, "raise_small": 0.166, "raise_big": 0.059},
+    "2245698": {"fold": 0.482, "call": 0.305, "raise_small": 0.115, "raise_big": 0.098},
+    "3342338": {"fold": 0.091, "call": 0.632, "raise_small": 0.188, "raise_big": 0.088},
+    "1245698": {"fold": 0.051, "call": 0.073, "raise_small": 0.233, "raise_big": 0.643},
+    "1508419": {"fold": 0.137, "call": 0.863},
+    "1245762": {"fold": 0.17, "call": 0.19, "raise_small": 0.235, "raise_big": 0.406},
+    "2294784": {"call": 0.882, "raise_small": 0.059, "raise_big": 0.059},
+    "2544705": {"fold": 0.391, "call": 0.429, "raise_small": 0.136, "raise_big": 0.044},
+    "3756033": {"fold": 0.072, "call": 0.722, "raise_small": 0.113, "raise_big": 0.093},
+    "2707457": {"fold": 0.17, "call": 0.308, "raise_small": 0.191, "raise_big": 0.33},
+    "2707459": {"fold": 0.5, "call": 0.5},
+    "2707971": {"fold": 0.5, "call": 0.5},
+    "1654785": {"fold": 0.229, "call": 0.433, "raise_small": 0.191, "raise_big": 0.147},
+    "1654787": {"fold": 0.507, "call": 0.493},
+    "2707969": {"fold": 0.338, "call": 0.359, "raise_small": 0.158, "raise_big": 0.144},
+    "1655299": {"fold": 0.245, "call": 0.755},
+    "1655297": {"fold": 0.15, "call": 0.328, "raise_small": 0.364, "raise_big": 0.159},
+    "1655361": {"fold": 0.204, "call": 0.492, "raise_small": 0.178, "raise_big": 0.126},
+    "1655873": {"fold": 0.234, "call": 0.481, "raise_small": 0.208, "raise_big": 0.076},
+    "2708033": {"fold": 0.273, "call": 0.271, "raise_small": 0.239, "raise_big": 0.218},
+    "1656449": {"fold": 0.311, "call": 0.365, "raise_small": 0.209, "raise_big": 0.115},
+    "1376258": {"fold": 0.033, "call": 0.558, "raise_small": 0.088, "raise_big": 0.321},
+    "1376770": {"fold": 0.047, "call": 0.102, "raise_small": 0.206, "raise_big": 0.645},
+    "1376768": {"call": 0.053, "raise_small": 0.255, "raise_big": 0.692},
+    "2310144": {"call": 0.117, "raise_small": 0.113, "raise_big": 0.771},
+    "3358722": {"fold": 0.049, "call": 0.316, "raise_small": 0.423, "raise_big": 0.211},
+    "2310146": {"fold": 0.038, "call": 0.105, "raise_small": 0.19, "raise_big": 0.666},
+    "3358721": {"fold": 0.072, "call": 0.701, "raise_small": 0.114, "raise_big": 0.113},
+    "2293763": {"fold": 0.463, "call": 0.537},
+    "2294275": {"fold": 0.42, "call": 0.58},
+    "2294339": {"fold": 0.369, "call": 0.631},
+    "1462785": {"fold": 0.102, "call": 0.793, "raise_small": 0.075, "raise_big": 0.029},
+    "1216514": {"fold": 0.041, "call": 0.294, "raise_small": 0.381, "raise_big": 0.283},
+    "3473920": {"call": 0.862, "raise_small": 0.102, "raise_big": 0.035},
+    "1754179": {"fold": 0.129, "call": 0.871},
+    "1228803": {"fold": 0.516, "call": 0.484},
+    "3359232": {"call": 0.705, "raise_small": 0.213, "raise_big": 0.082},
+    "1328130": {"fold": 0.404, "call": 0.557, "raise_small": 0.024, "raise_big": 0.015},
+    "2687553": {"fold": 0.322, "call": 0.508, "raise_small": 0.14, "raise_big": 0.031},
+    "3478016": {"call": 0.734, "raise_small": 0.193, "raise_big": 0.073},
+    "1349249": {"fold": 0.265, "call": 0.5, "raise_small": 0.169, "raise_big": 0.066},
+    "1638914": {"fold": 0.016, "call": 0.091, "raise_small": 0.115, "raise_big": 0.778},
+    "1638978": {"fold": 0.015, "call": 0.094, "raise_small": 0.226, "raise_big": 0.665},
+    "1638912": {"call": 0.019, "raise_small": 0.127, "raise_big": 0.855},
+    "2688000": {"call": 0.969, "raise_small": 0.015, "raise_big": 0.015},
+    "1639426": {"fold": 0.201, "call": 0.321, "raise_small": 0.253, "raise_big": 0.225},
+    "1640578": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "3297280": {"call": 0.925, "raise_small": 0.037, "raise_big": 0.038},
+    "3297282": {"fold": 0.428, "call": 0.423, "raise_small": 0.085, "raise_big": 0.064},
+    "3297792": {"call": 0.933, "raise_small": 0.039, "raise_big": 0.027},
+    "2806850": {"fold": 0.052, "call": 0.726, "raise_small": 0.166, "raise_big": 0.056},
+    "1363968": {"call": 0.288, "raise_small": 0.237, "raise_big": 0.475},
+    "2528322": {"fold": 0.064, "call": 0.851, "raise_small": 0.07, "raise_big": 0.015},
+    "1593923": {"fold": 0.179, "call": 0.821},
+    "2659393": {"fold": 0.453, "call": 0.427, "raise_small": 0.098, "raise_big": 0.021},
+    "2413122": {"fold": 0.205, "call": 0.665, "raise_small": 0.099, "raise_big": 0.031},
+    "1640065": {"fold": 0.127, "call": 0.753, "raise_small": 0.086, "raise_big": 0.034},
+    "1492609": {"fold": 0.219, "call": 0.683, "raise_small": 0.072, "raise_big": 0.026},
+    "2429441": {"fold": 0.188, "call": 0.394, "raise_small": 0.26, "raise_big": 0.159},
+    "2310656": {"call": 0.311, "raise_small": 0.331, "raise_big": 0.358},
+    "2310658": {"fold": 0.028, "call": 0.512, "raise_small": 0.314, "raise_big": 0.145},
+    "2560512": {"call": 0.286, "raise_small": 0.275, "raise_big": 0.439},
+    "2425411": {"fold": 0.431, "call": 0.569},
+    "2556482": {"fold": 0.065, "call": 0.681, "raise_small": 0.194, "raise_big": 0.06},
+    "1377283": {"fold": 0.22, "call": 0.78},
+    "1377347": {"fold": 0.174, "call": 0.826},
+    "1245696": {"call": 0.182, "raise_small": 0.371, "raise_big": 0.448},
+    "1754115": {"fold": 0.087, "call": 0.913},
+    "3477504": {"call": 0.3, "raise_small": 0.188, "raise_big": 0.512},
+    "1364480": {"call": 0.2, "raise_small": 0.271, "raise_big": 0.529},
+    "1594433": {"fold": 0.206, "call": 0.685, "raise_small": 0.082, "raise_big": 0.027},
+    "3490304": {"call": 0.602, "raise_small": 0.304, "raise_big": 0.094},
+    "1331202": {"fold": 0.443, "call": 0.259, "raise_small": 0.177, "raise_big": 0.121},
+    "1610754": {"fold": 0.103, "call": 0.498, "raise_small": 0.275, "raise_big": 0.124},
+    "3473410": {"fold": 0.055, "call": 0.759, "raise_small": 0.129, "raise_big": 0.057},
+    "1508417": {"fold": 0.132, "call": 0.799, "raise_small": 0.054, "raise_big": 0.015},
+    "2380800": {"call": 0.904, "raise_small": 0.048, "raise_big": 0.048},
+    "1479683": {"fold": 0.227, "call": 0.773},
+    "1480835": {"fold": 0.333, "call": 0.667},
+    "2806339": {"fold": 0.401, "call": 0.599},
+    "1770498": {"fold": 0.235, "call": 0.258, "raise_small": 0.255, "raise_big": 0.251},
+    "1770562": {"fold": 0.163, "call": 0.297, "raise_small": 0.285, "raise_big": 0.255},
+    "2397249": {"fold": 0.412, "call": 0.374, "raise_small": 0.133, "raise_big": 0.081},
+    "3887104": {"call": 0.032, "raise_small": 0.098, "raise_big": 0.87},
+    "3887106": {"fold": 0.017, "call": 0.728, "raise_small": 0.141, "raise_big": 0.114},
+    "2835456": {"call": 0.74, "raise_small": 0.13, "raise_big": 0.13},
+    "3887616": {"call": 0.645, "raise_small": 0.214, "raise_big": 0.14},
+    "1496131": {"fold": 0.234, "call": 0.766},
+    "1742979": {"fold": 0.2, "call": 0.8},
+    "2774082": {"fold": 0.336, "call": 0.428, "raise_small": 0.129, "raise_big": 0.108},
+    "1213442": {"fold": 0.259, "call": 0.622, "raise_small": 0.094, "raise_big": 0.025},
+    "1754178": {"fold": 0.08, "call": 0.513, "raise_small": 0.259, "raise_big": 0.148},
+    "1757185": {"fold": 0.241, "call": 0.462, "raise_small": 0.154, "raise_big": 0.143},
+    "2642434": {"fold": 0.143, "call": 0.816, "raise_small": 0.027, "raise_big": 0.014},
+    "2642498": {"fold": 0.283, "call": 0.527, "raise_small": 0.122, "raise_big": 0.068},
+    "1757699": {"fold": 0.096, "call": 0.904},
+    "1757763": {"fold": 0.349, "call": 0.651},
+    "2671681": {"fold": 0.578, "call": 0.335, "raise_small": 0.07, "raise_big": 0.016},
+    "1754753": {"fold": 0.123, "call": 0.744, "raise_small": 0.073, "raise_big": 0.06},
+    "2822657": {"fold": 0.292, "call": 0.503, "raise_small": 0.144, "raise_big": 0.061},
+    "2704384": {"call": 0.795, "raise_small": 0.103, "raise_big": 0.103},
+    "3756544": {"call": 0.579, "raise_small": 0.259, "raise_big": 0.162},
+    "1758275": {"fold": 0.279, "call": 0.721},
+    "1758273": {"fold": 0.224, "call": 0.585, "raise_small": 0.141, "raise_big": 0.05},
+    "1610755": {"fold": 0.194, "call": 0.806},
+    "1611907": {"fold": 0.294, "call": 0.706},
+    "1722498": {"fold": 0.252, "call": 0.428, "raise_small": 0.192, "raise_big": 0.128},
+    "1377346": {"fold": 0.246, "call": 0.292, "raise_small": 0.245, "raise_big": 0.217},
+    "3887105": {"fold": 0.052, "call": 0.745, "raise_small": 0.096, "raise_big": 0.107},
+    "2819137": {"fold": 0.468, "call": 0.366, "raise_small": 0.121, "raise_big": 0.045},
+    "2413634": {"fold": 0.094, "call": 0.661, "raise_small": 0.206, "raise_big": 0.039},
+    "1593857": {"fold": 0.134, "call": 0.73, "raise_small": 0.098, "raise_big": 0.038},
+    "1593921": {"fold": 0.242, "call": 0.478, "raise_small": 0.205, "raise_big": 0.076},
+    "2409538": {"fold": 0.044, "call": 0.801, "raise_small": 0.132, "raise_big": 0.023},
+    "3477506": {"fold": 0.038, "call": 0.614, "raise_small": 0.245, "raise_big": 0.102},
+    "2675266": {"fold": 0.044, "call": 0.809, "raise_small": 0.121, "raise_big": 0.026},
+    "3493888": {"call": 0.06, "raise_small": 0.093, "raise_big": 0.847},
+    "2834435": {"fold": 0.526, "call": 0.474},
+    "2675778": {"fold": 0.065, "call": 0.77, "raise_small": 0.13, "raise_big": 0.035},
+    "2393153": {"fold": 0.543, "call": 0.345, "raise_small": 0.079, "raise_big": 0.033},
+    "1724419": {"fold": 0.321, "call": 0.679},
+    "2643009": {"fold": 0.487, "call": 0.356, "raise_small": 0.12, "raise_big": 0.037},
+    "2413123": {"fold": 0.447, "call": 0.553},
+    "1594435": {"fold": 0.21, "call": 0.79},
+    "1624195": {"fold": 0.13, "call": 0.87},
+    "1217026": {"fold": 0.087, "call": 0.221, "raise_small": 0.278, "raise_big": 0.414},
+    "1523713": {"fold": 0.194, "call": 0.357, "raise_small": 0.277, "raise_big": 0.172},
+    "1524739": {"fold": 0.266, "call": 0.734},
+    "1524289": {"fold": 0.191, "call": 0.387, "raise_small": 0.263, "raise_big": 0.159},
+    "1524225": {"fold": 0.188, "call": 0.442, "raise_small": 0.225, "raise_big": 0.145},
+    "1593922": {"fold": 0.163, "call": 0.146, "raise_small": 0.45, "raise_big": 0.241},
+    "1594434": {"fold": 0.243, "call": 0.409, "raise_small": 0.215, "raise_big": 0.133},
+    "1610817": {"fold": 0.259, "call": 0.659, "raise_small": 0.067, "raise_big": 0.015},
+    "2769474": {"fold": 0.204, "call": 0.702, "raise_small": 0.068, "raise_big": 0.026},
+    "1233409": {"fold": 0.198, "call": 0.583, "raise_small": 0.149, "raise_big": 0.07},
+    "1348162": {"fold": 0.038, "call": 0.133, "raise_small": 0.239, "raise_big": 0.59},
+    "2425856": {"call": 0.934, "raise_small": 0.033, "raise_big": 0.033},
+    "1755267": {"fold": 0.136, "call": 0.864},
+    "2249219": {"fold": 0.505, "call": 0.495},
+    "2249283": {"fold": 0.509, "call": 0.491},
+    "2659394": {"fold": 0.022, "call": 0.93, "raise_small": 0.038, "raise_big": 0.01},
+    "1229889": {"fold": 0.19, "call": 0.666, "raise_small": 0.11, "raise_big": 0.034},
+    "1508993": {"fold": 0.174, "call": 0.697, "raise_small": 0.092, "raise_big": 0.037},
+    "1611393": {"fold": 0.268, "call": 0.56, "raise_small": 0.13, "raise_big": 0.043},
+    "2245697": {"fold": 0.386, "call": 0.359, "raise_small": 0.147, "raise_big": 0.107},
+    "1628291": {"fold": 0.163, "call": 0.837},
+    "1627777": {"fold": 0.172, "call": 0.552, "raise_small": 0.214, "raise_big": 0.062},
+    "2278466": {"fold": 0.124, "call": 0.557, "raise_small": 0.238, "raise_big": 0.081},
+    "1234561": {"fold": 0.209, "call": 0.436, "raise_small": 0.204, "raise_big": 0.151},
+    "2294273": {"fold": 0.213, "call": 0.574, "raise_small": 0.16, "raise_big": 0.053},
+    "1246273": {"fold": 0.185, "call": 0.64, "raise_small": 0.129, "raise_big": 0.045},
+    "1365059": {"fold": 0.304, "call": 0.696},
+    "1366147": {"fold": 0.38, "call": 0.62},
+    "2703361": {"fold": 0.081, "call": 0.642, "raise_small": 0.143, "raise_big": 0.134},
+    "1508418": {"fold": 0.138, "call": 0.335, "raise_small": 0.301, "raise_big": 0.226},
+    "2773570": {"fold": 0.232, "call": 0.547, "raise_small": 0.182, "raise_big": 0.039},
+    "2560001": {"fold": 0.104, "call": 0.523, "raise_small": 0.189, "raise_big": 0.185},
+    "2560515": {"fold": 0.432, "call": 0.568},
+    "2560579": {"fold": 0.5, "call": 0.5},
+    "2560513": {"fold": 0.372, "call": 0.404, "raise_small": 0.139, "raise_big": 0.085},
+    "2561089": {"fold": 0.275, "call": 0.321, "raise_small": 0.228, "raise_big": 0.176},
+    "1245763": {"fold": 0.361, "call": 0.639},
+    "1738882": {"fold": 0.105, "call": 0.426, "raise_small": 0.301, "raise_big": 0.169},
+    "2774081": {"fold": 0.351, "call": 0.374, "raise_small": 0.168, "raise_big": 0.108},
+    "1360962": {"fold": 0.098, "call": 0.503, "raise_small": 0.279, "raise_big": 0.119},
+    "1362050": {"fold": 0.207, "call": 0.311, "raise_small": 0.264, "raise_big": 0.217},
+    "1332227": {"fold": 0.205, "call": 0.795},
+    "1332865": {"fold": 0.215, "call": 0.532, "raise_small": 0.184, "raise_big": 0.069},
+    "3342848": {"call": 0.85, "raise_small": 0.092, "raise_big": 0.057},
+    "1348674": {"fold": 0.114, "call": 0.533, "raise_small": 0.255, "raise_big": 0.098},
+    "2376769": {"fold": 0.412, "call": 0.337, "raise_small": 0.165, "raise_big": 0.086},
+    "1492034": {"fold": 0.127, "call": 0.461, "raise_small": 0.275, "raise_big": 0.137},
+    "1230978": {"fold": 0.263, "call": 0.301, "raise_small": 0.226, "raise_big": 0.211},
+    "2511938": {"fold": 0.43, "call": 0.33, "raise_small": 0.131, "raise_big": 0.108},
+    "2643010": {"fold": 0.308, "call": 0.441, "raise_small": 0.16, "raise_big": 0.091},
+    "1757697": {"fold": 0.168, "call": 0.645, "raise_small": 0.135, "raise_big": 0.053},
+    "3822080": {"call": 0.852, "raise_small": 0.133, "raise_big": 0.015},
+    "1773569": {"fold": 0.24, "call": 0.346, "raise_small": 0.249, "raise_big": 0.165},
+    "1775233": {"fold": 0.238, "call": 0.337, "raise_small": 0.254, "raise_big": 0.171},
+    "1201217": {"fold": 0.343, "call": 0.475, "raise_small": 0.124, "raise_big": 0.057},
+    "1201793": {"fold": 0.418, "call": 0.336, "raise_small": 0.146, "raise_big": 0.101},
+    "1639491": {"fold": 0.143, "call": 0.857},
+    "1639427": {"fold": 0.159, "call": 0.841},
+    "3346944": {"call": 0.661, "raise_small": 0.254, "raise_big": 0.085},
+    "2294337": {"fold": 0.264, "call": 0.518, "raise_small": 0.149, "raise_big": 0.069},
+    "1233410": {"fold": 0.157, "call": 0.194, "raise_small": 0.253, "raise_big": 0.397},
+    "1496130": {"fold": 0.147, "call": 0.568, "raise_small": 0.181, "raise_big": 0.104},
+    "1200705": {"fold": 0.304, "call": 0.418, "raise_small": 0.184, "raise_big": 0.093},
+    "1724994": {"fold": 0.242, "call": 0.239, "raise_small": 0.296, "raise_big": 0.223},
+    "1595009": {"fold": 0.261, "call": 0.526, "raise_small": 0.166, "raise_big": 0.046},
+    "2297856": {"call": 0.112, "raise_small": 0.122, "raise_big": 0.766},
+    "3346434": {"fold": 0.096, "call": 0.483, "raise_small": 0.275, "raise_big": 0.146},
+    "2298368": {"call": 0.435, "raise_small": 0.229, "raise_big": 0.336},
+    "2298880": {"call": 0.564, "raise_small": 0.218, "raise_big": 0.218},
+    "1654784": {"call": 0.218, "raise_small": 0.116, "raise_big": 0.666},
+    "1654786": {"fold": 0.069, "call": 0.383, "raise_small": 0.103, "raise_big": 0.445},
+    "1655298": {"fold": 0.167, "call": 0.173, "raise_small": 0.261, "raise_big": 0.398},
+    "1655296": {"call": 0.157, "raise_small": 0.192, "raise_big": 0.652},
+    "1786370": {"fold": 0.063, "call": 0.167, "raise_small": 0.222, "raise_big": 0.548},
+    "1786434": {"fold": 0.149, "call": 0.197, "raise_small": 0.24, "raise_big": 0.414},
+    "1786368": {"call": 0.098, "raise_small": 0.186, "raise_big": 0.715},
+    "2428929": {"fold": 0.118, "call": 0.448, "raise_small": 0.247, "raise_big": 0.187},
+    "2429505": {"fold": 0.26, "call": 0.292, "raise_small": 0.242, "raise_big": 0.206},
+    "1233987": {"fold": 0.278, "call": 0.722},
+    "1773568": {"call": 0.269, "raise_small": 0.223, "raise_big": 0.508},
+    "1773570": {"fold": 0.033, "call": 0.61, "raise_small": 0.059, "raise_big": 0.297},
+    "2823168": {"call": 0.876, "raise_small": 0.062, "raise_big": 0.062},
+    "1774082": {"fold": 0.072, "call": 0.155, "raise_small": 0.217, "raise_big": 0.557},
+    "1363970": {"fold": 0.054, "call": 0.457, "raise_small": 0.152, "raise_big": 0.338},
+    "1246211": {"fold": 0.335, "call": 0.665},
+    "1757762": {"fold": 0.061, "call": 0.177, "raise_small": 0.322, "raise_big": 0.44},
+    "1463937": {"fold": 0.347, "call": 0.52, "raise_small": 0.094, "raise_big": 0.039},
+    "1233474": {"fold": 0.158, "call": 0.2, "raise_small": 0.188, "raise_big": 0.454},
+    "1497219": {"fold": 0.217, "call": 0.783},
+    "1233408": {"call": 0.207, "raise_small": 0.311, "raise_big": 0.482},
+    "1627139": {"fold": 0.199, "call": 0.801},
+    "2572288": {"call": 0.042, "raise_small": 0.074, "raise_big": 0.885},
+    "2572290": {"fold": 0.023, "call": 0.049, "raise_small": 0.145, "raise_big": 0.783},
+    "2573378": {"fold": 0.079, "call": 0.407, "raise_small": 0.311, "raise_big": 0.203},
+    "2572802": {"fold": 0.013, "call": 0.668, "raise_small": 0.232, "raise_big": 0.086},
+    "2560514": {"fold": 0.023, "call": 0.728, "raise_small": 0.2, "raise_big": 0.049},
+    "2561090": {"fold": 0.084, "call": 0.379, "raise_small": 0.316, "raise_big": 0.221},
+    "2425346": {"fold": 0.069, "call": 0.763, "raise_small": 0.126, "raise_big": 0.043},
+    "2428928": {"call": 0.094, "raise_small": 0.122, "raise_big": 0.784},
+    "2428930": {"fold": 0.003, "call": 0.073, "raise_small": 0.18, "raise_big": 0.743},
+    "2429952": {"call": 0.627, "raise_small": 0.186, "raise_big": 0.186},
+    "2429506": {"fold": 0.064, "call": 0.453, "raise_small": 0.335, "raise_big": 0.147},
+    "2429440": {"call": 0.435, "raise_small": 0.315, "raise_big": 0.25},
+    "1524291": {"fold": 0.147, "call": 0.853},
+    "1524801": {"fold": 0.232, "call": 0.581, "raise_small": 0.132, "raise_big": 0.055},
+    "2277955": {"fold": 0.43, "call": 0.57},
+    "1642497": {"fold": 0.222, "call": 0.302, "raise_small": 0.26, "raise_big": 0.216},
+    "1642499": {"fold": 0.5, "call": 0.5},
+    "1643011": {"fold": 0.412, "call": 0.588},
+    "1364482": {"fold": 0.079, "call": 0.192, "raise_small": 0.346, "raise_big": 0.383},
+    "1643523": {"fold": 0.5, "call": 0.5},
+    "1643587": {"fold": 0.5, "call": 0.5},
+    "1365058": {"fold": 0.195, "call": 0.489, "raise_small": 0.202, "raise_big": 0.114},
+    "1333379": {"fold": 0.212, "call": 0.788},
+    "1463298": {"fold": 0.24, "call": 0.335, "raise_small": 0.22, "raise_big": 0.205},
+    "1464450": {"fold": 0.286, "call": 0.26, "raise_small": 0.228, "raise_big": 0.226},
+    "2441218": {"fold": 0.008, "call": 0.073, "raise_small": 0.137, "raise_big": 0.782},
+    "3362816": {"call": 0.102, "raise_small": 0.155, "raise_big": 0.743},
+    "3363328": {"call": 0.717, "raise_small": 0.147, "raise_big": 0.136},
+    "1626690": {"fold": 0.06, "call": 0.178, "raise_small": 0.225, "raise_big": 0.537},
+    "2429442": {"fold": 0.013, "call": 0.715, "raise_small": 0.227, "raise_big": 0.045},
+    "1757187": {"fold": 0.317, "call": 0.683},
+    "2265603": {"fold": 0.43, "call": 0.57},
+    "2265667": {"fold": 0.568, "call": 0.432},
+    "1378435": {"fold": 0.165, "call": 0.835},
+    "1217027": {"fold": 0.223, "call": 0.777},
+    "1217091": {"fold": 0.19, "call": 0.81},
+    "1217603": {"fold": 0.29, "call": 0.71},
+    "1493122": {"fold": 0.232, "call": 0.298, "raise_small": 0.26, "raise_big": 0.211},
+    "2572800": {"call": 0.108, "raise_small": 0.313, "raise_big": 0.579},
+    "2822722": {"fold": 0.041, "call": 0.45, "raise_small": 0.31, "raise_big": 0.198},
+    "2561024": {"call": 0.629, "raise_small": 0.186, "raise_big": 0.186},
+    "3362817": {"fold": 0.185, "call": 0.439, "raise_small": 0.184, "raise_big": 0.192},
+    "1785857": {"fold": 0.312, "call": 0.356, "raise_small": 0.159, "raise_big": 0.173},
+    "1523715": {"fold": 0.479, "call": 0.521},
+    "1524227": {"fold": 0.218, "call": 0.782},
+    "1524803": {"fold": 0.318, "call": 0.682},
+    "2560577": {"fold": 0.306, "call": 0.351, "raise_small": 0.216, "raise_big": 0.128},
+    "2560003": {"fold": 0.406, "call": 0.594},
+    "1480321": {"fold": 0.342, "call": 0.503, "raise_small": 0.126, "raise_big": 0.028},
+    "1213506": {"fold": 0.295, "call": 0.593, "raise_small": 0.091, "raise_big": 0.021},
+    "1329282": {"fold": 0.456, "call": 0.307, "raise_small": 0.13, "raise_big": 0.107},
+    "1202307": {"fold": 0.418, "call": 0.582},
+    "2834946": {"fold": 0.017, "call": 0.712, "raise_small": 0.195, "raise_big": 0.076},
+    "1233473": {"fold": 0.288, "call": 0.356, "raise_small": 0.246, "raise_big": 0.109},
+    "1364546": {"fold": 0.162, "call": 0.224, "raise_small": 0.308, "raise_big": 0.306},
+    "1230979": {"fold": 0.192, "call": 0.808},
+    "2560578": {"fold": 0.144, "call": 0.327, "raise_small": 0.295, "raise_big": 0.234},
+    "1594371": {"fold": 0.098, "call": 0.902},
+    "2282562": {"fold": 0.22, "call": 0.441, "raise_small": 0.192, "raise_big": 0.147},
+    "2425922": {"fold": 0.245, "call": 0.408, "raise_small": 0.214, "raise_big": 0.133},
+    "2425410": {"fold": 0.107, "call": 0.488, "raise_small": 0.294, "raise_big": 0.112},
+    "2819138": {"fold": 0.034, "call": 0.574, "raise_small": 0.262, "raise_big": 0.131},
+    "2573312": {"call": 0.852, "raise_small": 0.074, "raise_big": 0.074},
+    "2671171": {"fold": 0.395, "call": 0.605},
+    "1233923": {"fold": 0.432, "call": 0.568},
+    "1655875": {"fold": 0.296, "call": 0.704},
+    "1261569": {"fold": 0.285, "call": 0.339, "raise_small": 0.185, "raise_big": 0.191},
+    "1262083": {"fold": 0.363, "call": 0.637},
+    "1262147": {"fold": 0.476, "call": 0.524},
+    "1262081": {"fold": 0.311, "call": 0.256, "raise_small": 0.216, "raise_big": 0.216},
+    "2282496": {"call": 0.93, "raise_small": 0.035, "raise_big": 0.035},
+    "2823234": {"fold": 0.056, "call": 0.43, "raise_small": 0.322, "raise_big": 0.193},
+    "2835010": {"fold": 0.084, "call": 0.345, "raise_small": 0.315, "raise_big": 0.256},
+    "1787521": {"fold": 0.342, "call": 0.417, "raise_small": 0.152, "raise_big": 0.089},
+    "1640579": {"fold": 0.122, "call": 0.878},
+    "2822721": {"fold": 0.24, "call": 0.453, "raise_small": 0.195, "raise_big": 0.112},
+    "2823233": {"fold": 0.333, "call": 0.307, "raise_small": 0.199, "raise_big": 0.162},
+    "3362818": {"fold": 0.079, "call": 0.576, "raise_small": 0.192, "raise_big": 0.153},
+    "1217089": {"fold": 0.294, "call": 0.383, "raise_small": 0.209, "raise_big": 0.114},
+    "1218177": {"fold": 0.265, "call": 0.439, "raise_small": 0.213, "raise_big": 0.083},
+    "2265666": {"fold": 0.302, "call": 0.487, "raise_small": 0.128, "raise_big": 0.082},
+    "1479746": {"fold": 0.145, "call": 0.524, "raise_small": 0.211, "raise_big": 0.119},
+    "1759363": {"fold": 0.224, "call": 0.776},
+    "1774595": {"fold": 0.343, "call": 0.657},
+    "1774657": {"fold": 0.31, "call": 0.409, "raise_small": 0.181, "raise_big": 0.099},
+    "2277954": {"fold": 0.182, "call": 0.598, "raise_small": 0.168, "raise_big": 0.053},
+    "2703937": {"fold": 0.34, "call": 0.418, "raise_small": 0.171, "raise_big": 0.071},
+    "1595523": {"fold": 0.215, "call": 0.785},
+    "1643075": {"fold": 0.5, "call": 0.5},
+    "2297858": {"fold": 0.018, "call": 0.1, "raise_small": 0.265, "raise_big": 0.617},
+    "2298370": {"fold": 0.073, "call": 0.475, "raise_small": 0.278, "raise_big": 0.174},
+    "2298946": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2572866": {"fold": 0.083, "call": 0.385, "raise_small": 0.321, "raise_big": 0.211},
+    "1643010": {"fold": 0.196, "call": 0.196, "raise_small": 0.264, "raise_big": 0.344},
+    "1643074": {"fold": 0.222, "call": 0.222, "raise_small": 0.288, "raise_big": 0.269},
+    "2692096": {"call": 0.711, "raise_small": 0.145, "raise_big": 0.145},
+    "1217090": {"fold": 0.098, "call": 0.213, "raise_small": 0.309, "raise_big": 0.38},
+    "1463362": {"fold": 0.304, "call": 0.383, "raise_small": 0.178, "raise_big": 0.135},
+    "2266177": {"fold": 0.365, "call": 0.304, "raise_small": 0.189, "raise_big": 0.142},
+    "2428931": {"fold": 0.488, "call": 0.512},
+    "2429443": {"fold": 0.468, "call": 0.532},
+    "2445312": {"call": 0.131, "raise_small": 0.157, "raise_big": 0.712},
+    "3494400": {"call": 0.606, "raise_small": 0.231, "raise_big": 0.163},
+    "2445826": {"fold": 0.136, "call": 0.303, "raise_small": 0.29, "raise_big": 0.271},
+    "2445890": {"fold": 0.211, "call": 0.27, "raise_small": 0.265, "raise_big": 0.254},
+    "1365633": {"fold": 0.354, "call": 0.452, "raise_small": 0.129, "raise_big": 0.066},
+    "2707968": {"call": 0.4, "raise_small": 0.24, "raise_big": 0.359},
+    "2703363": {"fold": 0.394, "call": 0.606},
+    "2703875": {"fold": 0.422, "call": 0.578},
+    "2838528": {"call": 0.084, "raise_small": 0.154, "raise_big": 0.763},
+    "2838530": {"fold": 0.048, "call": 0.082, "raise_small": 0.173, "raise_big": 0.696},
+    "2839040": {"call": 0.306, "raise_small": 0.409, "raise_big": 0.285},
+    "2839042": {"fold": 0.084, "call": 0.32, "raise_small": 0.308, "raise_big": 0.289},
+    "2314240": {"call": 0.223, "raise_small": 0.243, "raise_big": 0.533},
+    "2556994": {"fold": 0.121, "call": 0.686, "raise_small": 0.137, "raise_big": 0.055},
+    "2441793": {"fold": 0.309, "call": 0.367, "raise_small": 0.199, "raise_big": 0.125},
+    "2445314": {"fold": 0.125, "call": 0.133, "raise_small": 0.406, "raise_big": 0.337},
+    "2838529": {"fold": 0.162, "call": 0.375, "raise_small": 0.162, "raise_big": 0.302},
+    "2838531": {"fold": 0.481, "call": 0.519},
+    "2839043": {"fold": 0.503, "call": 0.497},
+    "2839041": {"fold": 0.337, "call": 0.317, "raise_small": 0.198, "raise_big": 0.149},
+    "2839105": {"fold": 0.288, "call": 0.305, "raise_small": 0.217, "raise_big": 0.189},
+    "1785859": {"fold": 0.4, "call": 0.6},
+    "1786371": {"fold": 0.193, "call": 0.807},
+    "1786435": {"fold": 0.399, "call": 0.601},
+    "1786369": {"fold": 0.187, "call": 0.442, "raise_small": 0.226, "raise_big": 0.146},
+    "1786433": {"fold": 0.259, "call": 0.447, "raise_small": 0.194, "raise_big": 0.1},
+    "1786945": {"fold": 0.366, "call": 0.483, "raise_small": 0.112, "raise_big": 0.039},
+    "1773571": {"fold": 0.454, "call": 0.546},
+    "1774083": {"fold": 0.323, "call": 0.677},
+    "1774659": {"fold": 0.194, "call": 0.806},
+    "1775747": {"fold": 0.469, "call": 0.531},
+    "1523714": {"fold": 0.048, "call": 0.507, "raise_small": 0.087, "raise_big": 0.358},
+    "1524226": {"fold": 0.117, "call": 0.157, "raise_small": 0.228, "raise_big": 0.499},
+    "1524290": {"fold": 0.102, "call": 0.253, "raise_small": 0.294, "raise_big": 0.351},
+    "1201219": {"fold": 0.369, "call": 0.631},
+    "2691650": {"fold": 0.158, "call": 0.328, "raise_small": 0.285, "raise_big": 0.229},
+    "1774080": {"call": 0.206, "raise_small": 0.333, "raise_big": 0.462},
+    "1217601": {"fold": 0.338, "call": 0.463, "raise_small": 0.145, "raise_big": 0.054},
+    "2441217": {"fold": 0.053, "call": 0.556, "raise_small": 0.158, "raise_big": 0.233},
+    "2441219": {"fold": 0.35, "call": 0.65},
+    "2441731": {"fold": 0.407, "call": 0.593},
+    "1376834": {"fold": 0.065, "call": 0.133, "raise_small": 0.188, "raise_big": 0.614},
+    "2380865": {"fold": 0.359, "call": 0.327, "raise_small": 0.177, "raise_big": 0.137},
+    "1757761": {"fold": 0.26, "call": 0.425, "raise_small": 0.205, "raise_big": 0.111},
+    "2834947": {"fold": 0.411, "call": 0.589},
+    "2835011": {"fold": 0.494, "call": 0.506},
+    "2703873": {"fold": 0.245, "call": 0.604, "raise_small": 0.116, "raise_big": 0.035},
+    "1235075": {"fold": 0.528, "call": 0.472},
+    "1725506": {"fold": 0.338, "call": 0.346, "raise_small": 0.188, "raise_big": 0.128},
+    "2310657": {"fold": 0.238, "call": 0.484, "raise_small": 0.194, "raise_big": 0.084},
+    "3493890": {"fold": 0.014, "call": 0.324, "raise_small": 0.437, "raise_big": 0.224},
+    "1217539": {"fold": 0.407, "call": 0.593},
+    "1217025": {"fold": 0.272, "call": 0.544, "raise_small": 0.129, "raise_big": 0.056},
+    "1200641": {"fold": 0.226, "call": 0.59, "raise_small": 0.128, "raise_big": 0.055},
+    "1774146": {"fold": 0.221, "call": 0.232, "raise_small": 0.247, "raise_big": 0.299},
+    "1333378": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2430018": {"fold": 0.171, "call": 0.397, "raise_small": 0.256, "raise_big": 0.177},
+    "1741826": {"fold": 0.2, "call": 0.347, "raise_small": 0.243, "raise_big": 0.21},
+    "2704449": {"fold": 0.505, "call": 0.313, "raise_small": 0.123, "raise_big": 0.058},
+    "1610305": {"fold": 0.259, "call": 0.488, "raise_small": 0.2, "raise_big": 0.053},
+    "2835522": {"fold": 0.068, "call": 0.375, "raise_small": 0.316, "raise_big": 0.241},
+    "1771650": {"fold": 0.237, "call": 0.254, "raise_small": 0.254, "raise_big": 0.254},
+    "1392641": {"fold": 0.313, "call": 0.354, "raise_small": 0.181, "raise_big": 0.151},
+    "2441729": {"fold": 0.19, "call": 0.523, "raise_small": 0.206, "raise_big": 0.081},
+    "1392643": {"fold": 0.5, "call": 0.5},
+    "1393155": {"fold": 0.494, "call": 0.506},
+    "1623042": {"fold": 0.101, "call": 0.466, "raise_small": 0.257, "raise_big": 0.175},
+    "2310721": {"fold": 0.213, "call": 0.333, "raise_small": 0.26, "raise_big": 0.194},
+    "1246274": {"fold": 0.221, "call": 0.274, "raise_small": 0.262, "raise_big": 0.243},
+    "2311233": {"fold": 0.304, "call": 0.28, "raise_small": 0.215, "raise_big": 0.202},
+    "1246849": {"fold": 0.175, "call": 0.535, "raise_small": 0.195, "raise_big": 0.095},
+    "3756034": {"fold": 0.051, "call": 0.486, "raise_small": 0.274, "raise_big": 0.189},
+    "2703939": {"fold": 0.347, "call": 0.653},
+    "1496066": {"fold": 0.165, "call": 0.445, "raise_small": 0.227, "raise_big": 0.163},
+    "1497218": {"fold": 0.273, "call": 0.316, "raise_small": 0.216, "raise_big": 0.194},
+    "1509506": {"fold": 0.239, "call": 0.255, "raise_small": 0.254, "raise_big": 0.253},
+    "2425921": {"fold": 0.393, "call": 0.392, "raise_small": 0.135, "raise_big": 0.081},
+    "2839617": {"fold": 0.259, "call": 0.259, "raise_small": 0.243, "raise_big": 0.238},
+    "1788035": {"fold": 0.158, "call": 0.842},
+    "1774147": {"fold": 0.265, "call": 0.735},
+    "1393153": {"fold": 0.371, "call": 0.362, "raise_small": 0.162, "raise_big": 0.105},
+    "1393217": {"fold": 0.205, "call": 0.319, "raise_small": 0.279, "raise_big": 0.197},
+    "1393729": {"fold": 0.304, "call": 0.317, "raise_small": 0.225, "raise_big": 0.154},
+    "1758274": {"fold": 0.225, "call": 0.258, "raise_small": 0.258, "raise_big": 0.258},
+    "1508354": {"fold": 0.186, "call": 0.338, "raise_small": 0.272, "raise_big": 0.204},
+    "2441730": {"fold": 0.022, "call": 0.553, "raise_small": 0.272, "raise_big": 0.154},
+    "2441795": {"fold": 0.501, "call": 0.499},
+    "1393219": {"fold": 0.814, "call": 0.186},
+    "1393667": {"fold": 0.474, "call": 0.526},
+    "1393731": {"fold": 0.456, "call": 0.544},
+    "1394819": {"fold": 0.543, "call": 0.457},
+    "1754114": {"fold": 0.119, "call": 0.517, "raise_small": 0.235, "raise_big": 0.128},
+    "2249794": {"fold": 0.69, "call": 0.216, "raise_small": 0.047, "raise_big": 0.046},
+    "1201155": {"fold": 0.267, "call": 0.733},
+    "1639490": {"fold": 0.185, "call": 0.277, "raise_small": 0.273, "raise_big": 0.264},
+    "1348610": {"fold": 0.22, "call": 0.307, "raise_small": 0.242, "raise_big": 0.231},
+    "1349762": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1758210": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1759362": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2839552": {"call": 0.449, "raise_small": 0.276, "raise_big": 0.276},
+    "2297859": {"fold": 0.426, "call": 0.574},
+    "1364994": {"fold": 0.238, "call": 0.36, "raise_small": 0.213, "raise_big": 0.19},
+    "1627202": {"fold": 0.203, "call": 0.331, "raise_small": 0.251, "raise_big": 0.214},
+    "2294338": {"fold": 0.275, "call": 0.385, "raise_small": 0.208, "raise_big": 0.132},
+    "1262659": {"fold": 0.383, "call": 0.617},
+    "1262595": {"fold": 0.5, "call": 0.5},
+    "1262145": {"fold": 0.22, "call": 0.294, "raise_small": 0.265, "raise_big": 0.22},
+    "1262657": {"fold": 0.257, "call": 0.396, "raise_small": 0.198, "raise_big": 0.148},
+    "2707456": {"call": 0.14, "raise_small": 0.181, "raise_big": 0.678},
+    "2707458": {"fold": 0.021, "call": 0.028, "raise_small": 0.179, "raise_big": 0.772},
+    "1758211": {"fold": 0.235, "call": 0.765},
+    "1758849": {"fold": 0.25, "call": 0.465, "raise_small": 0.171, "raise_big": 0.114},
+    "2310147": {"fold": 0.491, "call": 0.509},
+    "1774081": {"fold": 0.168, "call": 0.422, "raise_small": 0.237, "raise_big": 0.173},
+    "1774145": {"fold": 0.212, "call": 0.319, "raise_small": 0.258, "raise_big": 0.211},
+    "1755266": {"fold": 0.183, "call": 0.285, "raise_small": 0.273, "raise_big": 0.259},
+    "2442306": {"fold": 0.064, "call": 0.424, "raise_small": 0.319, "raise_big": 0.193},
+    "2441794": {"fold": 0.11, "call": 0.323, "raise_small": 0.305, "raise_big": 0.263},
+    "1200706": {"fold": 0.414, "call": 0.164, "raise_small": 0.272, "raise_big": 0.15},
+    "1233986": {"fold": 0.28, "call": 0.257, "raise_small": 0.232, "raise_big": 0.231},
+    "1217602": {"fold": 0.321, "call": 0.297, "raise_small": 0.202, "raise_big": 0.181},
+    "2311234": {"fold": 0.165, "call": 0.301, "raise_small": 0.281, "raise_big": 0.253},
+    "2707970": {"fold": 0.135, "call": 0.376, "raise_small": 0.265, "raise_big": 0.224},
+    "1786947": {"fold": 0.183, "call": 0.817},
+    "1394305": {"fold": 0.293, "call": 0.319, "raise_small": 0.22, "raise_big": 0.168},
+    "1201154": {"fold": 0.264, "call": 0.265, "raise_small": 0.238, "raise_big": 0.233},
+    "1201218": {"fold": 0.484, "call": 0.242, "raise_small": 0.137, "raise_big": 0.137},
+    "1786883": {"fold": 0.359, "call": 0.641},
+    "2708035": {"fold": 0.5, "call": 0.5},
+    "2442305": {"fold": 0.358, "call": 0.373, "raise_small": 0.175, "raise_big": 0.094},
+    "1198210": {"fold": 0.412, "call": 0.278, "raise_small": 0.156, "raise_big": 0.153},
+    "1261568": {"call": 0.303, "raise_small": 0.241, "raise_big": 0.456},
+    "2310659": {"fold": 0.391, "call": 0.609},
+    "1366146": {"fold": 0.257, "call": 0.322, "raise_small": 0.234, "raise_big": 0.187},
+    "2692161": {"fold": 0.264, "call": 0.34, "raise_small": 0.223, "raise_big": 0.173},
+    "1655362": {"fold": 0.172, "call": 0.211, "raise_small": 0.25, "raise_big": 0.367},
+    "2576896": {"call": 0.321, "raise_small": 0.349, "raise_big": 0.331},
+    "1524224": {"call": 0.112, "raise_small": 0.184, "raise_big": 0.704},
+    "2442240": {"call": 0.687, "raise_small": 0.156, "raise_big": 0.156},
+    "1229826": {"fold": 0.249, "call": 0.252, "raise_small": 0.25, "raise_big": 0.249},
+    "1217538": {"fold": 0.246, "call": 0.263, "raise_small": 0.246, "raise_big": 0.245},
+    "1774658": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1377282": {"fold": 0.18, "call": 0.328, "raise_small": 0.264, "raise_big": 0.229},
+    "1378434": {"fold": 0.296, "call": 0.282, "raise_small": 0.213, "raise_big": 0.209},
+    "2310722": {"fold": 0.225, "call": 0.272, "raise_small": 0.262, "raise_big": 0.24},
+    "2311168": {"call": 0.604, "raise_small": 0.198, "raise_big": 0.198},
+    "1262594": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1263746": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1214594": {"fold": 0.218, "call": 0.397, "raise_small": 0.225, "raise_big": 0.159},
+    "2430017": {"fold": 0.25, "call": 0.331, "raise_small": 0.251, "raise_big": 0.168},
+    "1725442": {"fold": 0.259, "call": 0.254, "raise_small": 0.244, "raise_big": 0.244},
+    "1726594": {"fold": 0.282, "call": 0.276, "raise_small": 0.222, "raise_big": 0.219},
+    "2445824": {"call": 0.333, "raise_small": 0.399, "raise_big": 0.267},
+    "1392640": {"call": 0.283, "raise_small": 0.199, "raise_big": 0.518},
+    "1392642": {"fold": 0.113, "call": 0.408, "raise_small": 0.161, "raise_big": 0.318},
+    "1655363": {"fold": 0.449, "call": 0.551},
+    "1247363": {"fold": 0.261, "call": 0.739},
+    "1261571": {"fold": 0.464, "call": 0.536},
+    "2249793": {"fold": 0.272, "call": 0.261, "raise_small": 0.236, "raise_big": 0.231},
+    "1218691": {"fold": 0.29, "call": 0.71},
+    "1246210": {"fold": 0.238, "call": 0.256, "raise_small": 0.254, "raise_big": 0.251},
+    "1247362": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1525891": {"fold": 0.201, "call": 0.799},
+    "1643009": {"fold": 0.204, "call": 0.317, "raise_small": 0.276, "raise_big": 0.203},
+    "1643073": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1218690": {"fold": 0.241, "call": 0.318, "raise_small": 0.234, "raise_big": 0.207},
+    "1263747": {"fold": 0.5, "call": 0.5},
+    "1262082": {"fold": 0.216, "call": 0.257, "raise_small": 0.261, "raise_big": 0.267},
+    "1262080": {"call": 0.329, "raise_small": 0.329, "raise_big": 0.341},
+    "1261570": {"fold": 0.183, "call": 0.354, "raise_small": 0.201, "raise_big": 0.262},
+    "2576385": {"fold": 0.179, "call": 0.436, "raise_small": 0.204, "raise_big": 0.181},
+    "1263233": {"fold": 0.234, "call": 0.286, "raise_small": 0.257, "raise_big": 0.223},
+    "1594370": {"fold": 0.259, "call": 0.304, "raise_small": 0.226, "raise_big": 0.21},
+    "1656963": {"fold": 0.15, "call": 0.85},
+    "2429507": {"fold": 0.5, "call": 0.5},
+    "1611906": {"fold": 0.244, "call": 0.295, "raise_small": 0.245, "raise_big": 0.216},
+    "2445891": {"fold": 0.5, "call": 0.5},
+    "1233922": {"fold": 0.223, "call": 0.295, "raise_small": 0.251, "raise_big": 0.231},
+    "2298433": {"fold": 0.239, "call": 0.326, "raise_small": 0.241, "raise_big": 0.194},
+    "2577408": {"call": 0.446, "raise_small": 0.277, "raise_big": 0.277},
+    "1393152": {"call": 0.3, "raise_small": 0.334, "raise_big": 0.367},
+    "2576898": {"fold": 0.094, "call": 0.306, "raise_small": 0.303, "raise_big": 0.297},
+    "2576962": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2576897": {"fold": 0.246, "call": 0.299, "raise_small": 0.246, "raise_big": 0.209},
+    "2576961": {"fold": 0.324, "call": 0.263, "raise_small": 0.207, "raise_big": 0.207},
+    "2577473": {"fold": 0.237, "call": 0.264, "raise_small": 0.258, "raise_big": 0.241},
+    "2692162": {"fold": 0.093, "call": 0.385, "raise_small": 0.312, "raise_big": 0.21},
+    "1742978": {"fold": 0.214, "call": 0.311, "raise_small": 0.256, "raise_big": 0.219},
+    "1393154": {"fold": 0.192, "call": 0.195, "raise_small": 0.24, "raise_big": 0.373},
+    "2310723": {"fold": 0.361, "call": 0.639},
+    "2577474": {"fold": 0.198, "call": 0.267, "raise_small": 0.267, "raise_big": 0.267},
+    "2708545": {"fold": 0.205, "call": 0.298, "raise_small": 0.278, "raise_big": 0.218},
+    "1262146": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2298434": {"fold": 0.198, "call": 0.282, "raise_small": 0.272, "raise_big": 0.248},
+    "1202306": {"fold": 0.305, "call": 0.255, "raise_small": 0.22, "raise_big": 0.22},
+    "2294850": {"fold": 0.201, "call": 0.393, "raise_small": 0.253, "raise_big": 0.154},
+    "1643585": {"fold": 0.245, "call": 0.259, "raise_small": 0.249, "raise_big": 0.247},
+    "1525377": {"fold": 0.156, "call": 0.51, "raise_small": 0.226, "raise_big": 0.107},
+    "1655811": {"fold": 0.09, "call": 0.91},
+    "2708480": {"call": 0.333, "raise_small": 0.333, "raise_big": 0.333},
+    "2576387": {"fold": 0.5, "call": 0.5},
+    "2576899": {"fold": 0.5, "call": 0.5},
+    "2314753": {"fold": 0.2, "call": 0.329, "raise_small": 0.272, "raise_big": 0.2},
+    "2314241": {"fold": 0.293, "call": 0.301, "raise_small": 0.205, "raise_big": 0.201},
+    "2314242": {"fold": 0.188, "call": 0.197, "raise_small": 0.263, "raise_big": 0.352},
+    "2314754": {"fold": 0.213, "call": 0.262, "raise_small": 0.262, "raise_big": 0.262},
+    "2315330": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2314818": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2314752": {"call": 0.318, "raise_small": 0.318, "raise_big": 0.364},
+    "1524738": {"fold": 0.061, "call": 0.313, "raise_small": 0.313, "raise_big": 0.313},
+    "2708546": {"fold": 0.184, "call": 0.272, "raise_small": 0.272, "raise_big": 0.272},
+    "1524802": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1525890": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2315264": {"call": 0.333, "raise_small": 0.333, "raise_big": 0.333},
+    "1393218": {"fold": 0.18, "call": 0.18, "raise_small": 0.238, "raise_big": 0.402},
+    "2839618": {"fold": 0.207, "call": 0.272, "raise_small": 0.267, "raise_big": 0.254},
+    "1627138": {"fold": 0.212, "call": 0.424, "raise_small": 0.187, "raise_big": 0.177},
+    "2839106": {"fold": 0.23, "call": 0.257, "raise_small": 0.257, "raise_big": 0.257},
+    "1595522": {"fold": 0.269, "call": 0.258, "raise_small": 0.237, "raise_big": 0.237},
+    "1262658": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1393730": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1393666": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1394818": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2446336": {"call": 0.443, "raise_small": 0.278, "raise_big": 0.278},
+    "2708034": {"fold": 0.141, "call": 0.295, "raise_small": 0.289, "raise_big": 0.275},
+    "1235074": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1786882": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1788034": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2839107": {"fold": 0.5, "call": 0.5},
+    "1786946": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2314243": {"fold": 0.5, "call": 0.5},
+    "2314755": {"fold": 0.5, "call": 0.5},
+    "1644161": {"fold": 0.242, "call": 0.26, "raise_small": 0.255, "raise_big": 0.242},
+    "2576963": {"fold": 0.5, "call": 0.5},
+    "2314817": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2298945": {"fold": 0.228, "call": 0.368, "raise_small": 0.236, "raise_big": 0.168},
+    "1644675": {"fold": 0.5, "call": 0.5},
+    "1655874": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2315329": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1774594": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1655810": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "1656962": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25},
+    "2314819": {"fold": 0.5, "call": 0.5},
+    "2446402": {"fold": 0.25, "call": 0.25, "raise_small": 0.25, "raise_big": 0.25}
+    
 }
+""")  
 
+# ===============================
+# CONSTANTS (MUST MATCH TRAINER)
+# ===============================
+
+
+RANKS = "23456789TJQKA"
+
+# ===============================
+# ABSTRACTION (MATCH TRAINER)
+# ===============================
+
+def preflop_bucket(hole):
+    vals = sorted([RANKS.index(c[0]) + 2 for c in hole], reverse=True)
+    hi, lo = vals
+    suited = hole[0][1] == hole[1][1]
+    pair = hi == lo
+    gap = hi - lo
+
+    score = (hi + lo) / 28.0
+    if pair: score += 0.5
+    if suited: score += 0.07
+    if gap <= 1: score += 0.05
+
+    return min(5, int(score * 6))
+
+
+def postflop_bucket(hole, board):
+    cards = list(hole) + list(board)
+    ranks = [c[0] for c in cards]
+
+    rank_counts = {}
+    for r in ranks:
+        rank_counts[r] = rank_counts.get(r, 0) + 1
+
+    counts = sorted(rank_counts.values(), reverse=True)
+
+    # Made hands
+    if counts[0] >= 4:
+        return 5
+    if counts[0] == 3 and len(counts) > 1 and counts[1] >= 2:
+        return 5
+    if counts[0] == 3:
+        return 4
+    if len(counts) > 1 and counts[0] == 2 and counts[1] == 2:
+        return 3
+    if counts[0] == 2:
+        return 2
+
+    # Flush draw bucket (stronger than weak pair)
+    suits = {}
+    for c in cards:
+        suits[c[1]] = suits.get(c[1], 0) + 1
+    if max(suits.values()) >= 4:
+        return 3
+
+    return 1
+
+
+def board_texture(board):
+    if len(board) < 3:
+        return 0
+
+    suits = {}
+    for c in board:
+        suits[c[1]] = suits.get(c[1], 0) + 1
+
+    return 1 if max(suits.values()) >= 3 else 0
+
+
+def encode_key(street, h, e, t, p, c, r):
+    return (
+        (street << 20) |
+        (h << 17) |
+        (e << 14) |
+        (t << 12) |
+        (p << 9) |
+        (c << 6) |
+        r
+    )
+
+# ===============================
+# BOT
+# ===============================
 
 class Player(BaseBot):
-    '''A pokerbot.'''
 
-    def __init__(self) -> None:
-        # Per-match lightweight opponent modeling (1000 rounds max).
-        self.last_round_payoff = 0
-        self.rounds_seen = 0
-        self.opp_pressure_spots = 0
-        self.opp_pressure_amount = 0
-        self.opp_auction_cards_seen = 0
-        self.opp_high_reveal_count = 0
+    def build_info_key(self, current_state: PokerState):
 
-        self._card_cache = {f'{r}{s}': eval7.Card(f'{r}{s}') for r in '23456789TJQKA' for s in 'cdhs'}
+        street_map = {
+            "pre-flop": 0,
+            "flop": 1,
+            "turn": 2,
+            "river": 3
+        }
 
-    def on_hand_start(self, game_info: GameInfo, current_state: PokerState) -> None:
-        self.last_round_payoff = 0
-        self.rounds_seen = game_info.round_num
+        street = street_map[current_state.street]
+        hole = current_state.my_hand
 
-    def on_hand_end(self, game_info: GameInfo, current_state: PokerState) -> None:
-        self.last_round_payoff = current_state.payoff
-        for c in current_state.opp_revealed_cards:
-            self.opp_auction_cards_seen += 1
-            if RANK_VALUE[c[0]] >= 11:
-                self.opp_high_reveal_count += 1
-
-    def _preflop_strength(self, cards: list[str]) -> float:
-        ranks = sorted([RANK_VALUE[c[0]] for c in cards], reverse=True)
-        high, low = ranks[0], ranks[1]
-        suited = cards[0][1] == cards[1][1]
-        gap = abs(high - low)
-
-        score = (high + low) / 28.0
-        if high == low:
-            score += 0.55 + high / 40.0
-        if suited:
-            score += 0.08
-        if gap <= 1:
-            score += 0.08
-        elif gap == 2:
-            score += 0.04
-        if high >= 13 and low >= 10:
-            score += 0.10
-        return min(score, 1.0)
-
-    def _board_texture_adjustment(self, board: list[str], my_cards: list[str]) -> tuple[float, float]:
-        '''Returns (equity_adjustment, aggression_adjustment).'''
-        if len(board) < 3:
-            return (0.0, 0.0)
-
-        board_ranks = [RANK_VALUE[c[0]] for c in board]
-        board_suits = [c[1] for c in board]
-
-        rank_counts = {}
-        for r in board_ranks:
-            rank_counts[r] = rank_counts.get(r, 0) + 1
-        max_pairing = max(rank_counts.values())
-
-        suit_counts = {}
-        for s in board_suits:
-            suit_counts[s] = suit_counts.get(s, 0) + 1
-        max_suit = max(suit_counts.values())
-
-        unique_sorted = sorted(set(board_ranks))
-        if 14 in unique_sorted:
-            unique_sorted = [1] + unique_sorted
-
-        longest = 1
-        run = 1
-        for i in range(1, len(unique_sorted)):
-            if unique_sorted[i] == unique_sorted[i - 1] + 1:
-                run += 1
-                longest = max(longest, run)
-            else:
-                run = 1
-
-        equity_adj = 0.0
-        aggro_adj = 0.0
-
-        # Wet boards: reduce one-pair confidence and reduce bluffing frequency.
-        if max_suit >= 3:
-            equity_adj -= 0.03
-            aggro_adj -= 0.05
-        if longest >= 3:
-            equity_adj -= 0.03
-            aggro_adj -= 0.04
-
-        # Paired/trips board: top pair loses value, but nutted hands can still value-bet.
-        if max_pairing >= 2:
-            equity_adj -= 0.02
-            aggro_adj -= 0.02
-
-        # If our hole cards share dominant suit on a wet board, recover confidence slightly.
-        if max_suit >= 3:
-            dominant_suit = max(suit_counts, key=suit_counts.get)
-            my_suit_hits = sum(1 for c in my_cards if c[1] == dominant_suit)
-            if my_suit_hits == 2:
-                equity_adj += 0.03
-
-        return (equity_adj, aggro_adj)
-
-    def _postflop_strength(self, my_cards: list[str], board: list[str]) -> float:
-        cards = my_cards + board
-        ranks = [RANK_VALUE[c[0]] for c in cards]
-
-        counts = {}
-        for rank in ranks:
-            counts[rank] = counts.get(rank, 0) + 1
-        multiples = sorted(counts.values(), reverse=True)
-
-        suits = {}
-        for card in cards:
-            suits[card[1]] = suits.get(card[1], 0) + 1
-        max_suit = max(suits.values())
-        is_flush_draw = max_suit >= 4
-
-        unique_ranks = sorted(set(ranks))
-        if 14 in unique_ranks:
-            unique_ranks = [1] + unique_ranks
-
-        longest_run = 1
-        run = 1
-        for i in range(1, len(unique_ranks)):
-            if unique_ranks[i] == unique_ranks[i - 1] + 1:
-                run += 1
-                longest_run = max(longest_run, run)
-            else:
-                run = 1
-
-        if longest_run >= 5:
-            raw = 0.95
-        elif multiples[0] == 4:
-            raw = 0.93
-        elif multiples[0] == 3 and len(multiples) > 1 and multiples[1] >= 2:
-            raw = 0.90
-        elif max_suit >= 5:
-            raw = 0.88
-        elif multiples[0] == 3:
-            raw = 0.76
-        elif len(multiples) > 1 and multiples[0] == 2 and multiples[1] == 2:
-            raw = 0.70
-        elif multiples[0] == 2:
-            raw = 0.58
-        elif longest_run == 4 and is_flush_draw:
-            raw = 0.56
-        elif longest_run == 4 or is_flush_draw:
-            raw = 0.48
+        if street == 0:
+            h = preflop_bucket(hole)
+            e = h
+            t = 0
         else:
-            hole_high = max(RANK_VALUE[c[0]] for c in my_cards)
-            raw = 0.20 + hole_high / 70.0
+            h = preflop_bucket(hole)
+            e = postflop_bucket(hole, current_state.board)
+            t = board_texture(current_state.board)
 
-        tex_eq, _ = self._board_texture_adjustment(board, my_cards)
-        return max(0.05, min(0.98, raw + tex_eq))
+        pot = current_state.pot
+        cost = current_state.cost_to_call
 
-    def _street_strength(self, current_state: PokerState) -> float:
-        if current_state.street == 'pre-flop':
-            return self._preflop_strength(current_state.my_hand)
-        return self._postflop_strength(current_state.my_hand, current_state.board)
+        p_bucket = min(5, int(pot / 300))
+        c_bucket = min(4, int(cost / 200))
 
-    def _opponent_pressure_factor(self) -> float:
-        if self.opp_pressure_spots == 0:
-            return 0.0
-        avg_pressure = self.opp_pressure_amount / self.opp_pressure_spots
-        # Convert chips to a small normalized factor.
-        return min(0.08, avg_pressure / 1200.0)
+        # If engine provides raise tracking use it, else assume 0
+        r_bucket=0
 
-    def _revealed_high_card_factor(self) -> float:
-        if self.opp_auction_cards_seen == 0:
-            return 0.0
-        high_rate = self.opp_high_reveal_count / self.opp_auction_cards_seen
-        # If opponent often reveals high cards in auctions, respect pressure slightly more.
-        return min(0.05, max(0.0, (high_rate - 0.45) * 0.12))
+        key_int = encode_key(street, h, e, t, p_bucket, c_bucket, r_bucket)
 
-    def _auction_bid(self, current_state: PokerState) -> int:
-        strength = self._street_strength(current_state)
-        pot = max(current_state.pot, 1)
+        return str(key_int)
 
-        # Keep bids small to avoid auction bleed.
-        base_cap = int(min(current_state.my_chips * 0.06, pot * 0.32 + 6))
+    # ===============================
 
-        if strength < 0.45:
-            target = int(base_cap * 0.75)
-        elif strength < 0.70:
-            target = int(base_cap * 1.00)
-        else:
-            target = int(base_cap * 0.65)
+    def get_move(self, game_info: GameInfo, current_state: PokerState):
 
-        # If opponent often shows high cards from auction reveals, pay a touch less.
-        target = int(target * (1.0 - self._revealed_high_card_factor()))
-        return max(0, min(target, current_state.my_chips))
+        # Auction stage (if your environment uses it)
+        if current_state.street == "auction":
+            return ActionBid(min(10, current_state.my_chips))
 
-    def _risk_mode(self, game_info: GameInfo) -> float:
-        '''
-        Returns a risk scalar in [0, 1].
-        0 = default play, 1 = strong loss-avoid mode.
-        '''
-        rounds_left = max(1, 1000 - game_info.round_num)
-        # If losing big late, protect stack and avoid high-variance spots.
-        if game_info.bankroll < -900 and rounds_left < 450:
-            return 1.0
-        if game_info.bankroll < -600 and rounds_left < 650:
-            return 0.7
-        if game_info.bankroll < -350:
-            return 0.4
-        return 0.0
+        key = self.build_info_key(current_state)
 
-    def _max_safe_call(self, current_state: PokerState, risk_mode: float) -> int:
-        '''Cap single-call exposure to reduce heavy-loss outliers.'''
-        pot = max(current_state.pot, 1)
-        stack = max(current_state.my_chips, 1)
-        # strict when losing; looser when neutral/winning
-        pot_cap = 0.55 - 0.22 * risk_mode
-        stack_cap = 0.10 - 0.04 * risk_mode
-        return int(min(pot * pot_cap, stack * stack_cap + 50))
-
-    def _capped_raise(self, min_raise: int, max_raise: int, pot: int, chips: int, risk_mode: float, frac: float) -> int:
-        '''Choose raise size with hard cap to avoid giant losses.'''
-        target = min_raise + int((max_raise - min_raise) * frac)
-        hard_cap = int(min(max_raise, pot * (0.75 - 0.30 * risk_mode), chips * (0.22 - 0.08 * risk_mode) + min_raise))
-        amount = max(min_raise, min(target, hard_cap))
-        return max(min_raise, min(amount, max_raise))
-
-    def _monte_carlo_equity(self, current_state: PokerState, samples: int) -> float:
-        '''Fast bounded equity estimate for turn/river only.''' 
-        my_cards = current_state.my_hand
-        board = current_state.board
-        known = set(my_cards + board + current_state.opp_revealed_cards)
-        if len(board) < 4:
-            return -1.0
-
-        my_eval_cards = [self._card_cache[c] for c in my_cards]
-        board_eval_cards = [self._card_cache[c] for c in board]
-
-        full_deck = [f'{r}{s}' for r in '23456789TJQKA' for s in 'cdhs']
-        remaining = [c for c in full_deck if c not in known]
-
-        if len(remaining) < 3:
-            return -1.0
-
-        wins = 0.0
-        for _ in range(samples):
-            draw = random.sample(remaining, 3)
-
-            if current_state.opp_revealed_cards:
-                opp = [self._card_cache[current_state.opp_revealed_cards[0]], self._card_cache[draw[0]]]
-                idx = 1
-            else:
-                opp = [self._card_cache[draw[0]], self._card_cache[draw[1]]]
-                idx = 2
-
-            if len(board_eval_cards) == 4:
-                community = board_eval_cards + [self._card_cache[draw[idx]]]
-            else:
-                community = board_eval_cards
-
-            my_val = eval7.evaluate(community + my_eval_cards)
-            opp_val = eval7.evaluate(community + opp)
-
-            if my_val > opp_val:
-                wins += 1.0
-            elif my_val == opp_val:
-                wins += 0.5
-
-        return wins / samples
-
-    def get_move(self, game_info: GameInfo, current_state: PokerState) -> ActionFold | ActionCall | ActionCheck | ActionRaise | ActionBid:
-        if current_state.street == 'auction':
-            base_bid = self._auction_bid(current_state)
-            # If we are in loss-avoid mode, trim auction exposure further.
-            trim = 1.0 - 0.25 * self._risk_mode(game_info)
-            return ActionBid(int(base_bid * trim))
-
-        if current_state.cost_to_call > 0:
-            self.opp_pressure_spots += 1
-            self.opp_pressure_amount += current_state.cost_to_call
-
-        strength = self._street_strength(current_state)
-        pot = max(current_state.pot, 1)
-        cost_to_call = max(current_state.cost_to_call, 0)
-        pot_odds = cost_to_call / (pot + cost_to_call) if cost_to_call > 0 else 0.0
-        risk_mode = self._risk_mode(game_info)
-
-        _, tex_aggro = self._board_texture_adjustment(current_state.board, current_state.my_hand)
-        pressure_penalty = self._opponent_pressure_factor() + self._revealed_high_card_factor()
-        effective_strength = max(0.01, min(0.99, strength + tex_aggro - pressure_penalty * 0.6 - 0.05 * risk_mode))
-
-        # Bounded Monte Carlo: only in close, expensive, late-street decisions with enough time bank.
-        if (
-            current_state.street in ('turn', 'river')
-            and cost_to_call > 0
-            and game_info.time_bank > 6.0
-            and abs(effective_strength - pot_odds) < 0.10
-            and cost_to_call > pot * 0.12
-        ):
-            mc_samples = 30 if game_info.time_bank < 12.0 else 55
-            mc_equity = self._monte_carlo_equity(current_state, mc_samples)
-            if mc_equity >= 0:
-                effective_strength = 0.55 * effective_strength + 0.45 * mc_equity
-
-        if current_state.can_act(ActionRaise):
-            min_raise, max_raise = current_state.raise_bounds
-            strong_threshold = 0.80 + max(0.0, -tex_aggro) * 0.3 + 0.08 * risk_mode
-            medium_threshold = 0.68 + max(0.0, -tex_aggro) * 0.25 + 0.06 * risk_mode
-
-            if effective_strength > strong_threshold:
-                frac = 0.22 if current_state.street == 'river' else 0.30
-                return ActionRaise(self._capped_raise(min_raise, max_raise, pot, current_state.my_chips, risk_mode, frac))
-
-            if effective_strength > medium_threshold and current_state.street in ('flop', 'turn', 'river'):
-                return ActionRaise(min_raise)
-
-        if current_state.can_act(ActionCheck):
-            return ActionCheck()
-
-        if current_state.can_act(ActionCall):
-            margin = (0.08 if current_state.street == 'pre-flop' else 0.05) - 0.02 * risk_mode
-            max_safe = self._max_safe_call(current_state, risk_mode)
-            # Emergency brake against very large single decision losses.
-            if cost_to_call > max_safe and effective_strength < 0.86:
-                return ActionFold()
-            if effective_strength + margin >= pot_odds:
+        # Fallback safety if unseen state
+        if key not in POLICY:
+            if current_state.can_act(ActionCheck):
+                return ActionCheck()
+            if current_state.can_act(ActionCall):
                 return ActionCall()
             return ActionFold()
 
+        dist = POLICY[key]
+        actions = list(dist.keys())
+        probs = list(dist.values())
+
+        chosen = random.choices(actions, weights=probs)[0]
+
+        # ===============================
+        # APPLY CHOSEN ACTION
+        # ===============================
+
+        if chosen == "fold" and current_state.can_act(ActionFold):
+            return ActionFold()
+
+        if chosen == "call":
+            if current_state.can_act(ActionCall):
+                return ActionCall()
+            if current_state.can_act(ActionCheck):
+                return ActionCheck()
+
+        if chosen in ("raise_small", "raise_big") and current_state.can_act(ActionRaise):
+
+            min_raise, max_raise = current_state.raise_bounds
+            pot = current_state.pot
+            cost = current_state.cost_to_call
+
+            total_after_call = pot + cost
+
+            if chosen == "raise_small":
+                target = int(total_after_call * 0.5)
+            else:
+                target = int(total_after_call * 1.0)
+
+            amount = max(min_raise, min(max_raise, target))
+
+            return ActionRaise(amount)
+
+        # Final safety fallback
+        if current_state.can_act(ActionCheck):
+            return ActionCheck()
+        if current_state.can_act(ActionCall):
+            return ActionCall()
+
         return ActionFold()
 
+
+# ===============================
+# RUN
+# ===============================
 
 if __name__ == '__main__':
     run_bot(Player(), parse_args())
